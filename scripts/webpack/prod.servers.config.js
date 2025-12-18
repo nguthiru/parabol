@@ -76,7 +76,13 @@ module.exports = (config) => {
         'parabol-client': CLIENT_ROOT,
         'parabol-server': SERVER_ROOT,
         // this is for radix-ui, we import & transform ESM packages, but they can't find react/jsx-runtime
-        'react/jsx-runtime': require.resolve('react/jsx-runtime')
+        'react/jsx-runtime': require.resolve('react/jsx-runtime'),
+        // Ignore rrule-rust native binaries for all platforms - fallback to JS
+        '@rrule-rust/lib-linux-arm-musleabihf': false,
+        '@rrule-rust/lib-linux-arm-gnueabihf': false,
+        '@rrule-rust/lib-linux-riscv64-musl': false,
+        '@rrule-rust/lib-linux-riscv64-gnu': false,
+        '@rrule-rust/lib-linux-s390x-gnu': false
       },
       extensions: ['.mjs', '.js', '.json', '.ts', '.tsx', '.graphql']
     },
@@ -95,6 +101,9 @@ module.exports = (config) => {
       // Not minifying costs us ~50MB extra, but it doesn't require sourcemaps & compiles 90s faster
       minimize: false
     },
+    ignoreWarnings: [
+      /the request of a dependency is an expression/
+    ],
     plugins: [
       // Pro tip: comment this out along with stable entry files for quick debugging
       new CleanWebpackPlugin(),
@@ -131,6 +140,13 @@ module.exports = (config) => {
       new webpack.IgnorePlugin({
         resourceRegExp: /inter-bold.otf$/,
         contextRegExp: /@dicebear/
+      }),
+      // Ignore optional ws dependencies
+      new webpack.IgnorePlugin({
+        resourceRegExp: /^bufferutil$/
+      }),
+      new webpack.IgnorePlugin({
+        resourceRegExp: /^utf-8-validate$/
       }),
       new CopyWebpackPlugin({
         patterns: [
