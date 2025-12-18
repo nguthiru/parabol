@@ -18,7 +18,13 @@ const INIT_PUBLIC_PATH = path.join(SERVER_ROOT, 'initPublicPath.ts')
 const INIT_LOGGING = path.join(SERVER_ROOT, 'initLogging.ts')
 const MONKEYPATCHES = path.join(SERVER_ROOT, 'monkeyPatches.ts')
 
-const COMMIT_HASH = cp.execSync('git rev-parse HEAD').toString().trim()
+let COMMIT_HASH
+try {
+  COMMIT_HASH = cp.execSync('git rev-parse HEAD', {stdio: ['ignore', 'pipe', 'ignore']}).toString().trim()
+} catch (e) {
+  // Fallback when .git is not available (e.g., in Docker builds)
+  COMMIT_HASH = process.env.COMMIT_HASH || process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown'
+}
 const runtimePlatform = `${process.platform}-${process.arch}`
 
 module.exports = (config) => {
