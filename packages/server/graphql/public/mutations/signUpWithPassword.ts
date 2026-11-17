@@ -58,6 +58,8 @@ const signUpWithPassword: MutationResolvers['signUpWithPassword'] = async (
     return userErrorResult('SIGN_IN_WITH_GOOGLE', 'Try logging in with Google')
   } else if (error === AuthenticationError.USER_EXISTS_MICROSOFT) {
     return userErrorResult('SIGN_IN_WITH_MICROSOFT', 'Try logging in with Microsoft')
+  } else if (error === AuthenticationError.USER_EXISTS_OIDC) {
+    return userErrorResult('SIGN_IN_WITH_OIDC', `Try logging in with ${process.env.OIDC_PROVIDER_NAME || 'SSO'}`)
   } else if (error === AuthenticationError.INVALID_PASSWORD) {
     return userErrorResult('USER_EXISTS', 'User already exists')
   }
