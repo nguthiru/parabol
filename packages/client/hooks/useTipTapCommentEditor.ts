@@ -1,17 +1,22 @@
+import Highlight from '@tiptap/extension-highlight'
 import Mention from '@tiptap/extension-mention'
 import {Placeholder} from '@tiptap/extensions'
-import {Extension, useEditor} from '@tiptap/react'
+import {Extension, type JSONContent, useEditor} from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import {useRef} from 'react'
+import {useMemo, useRef} from 'react'
 import type Atmosphere from '../Atmosphere'
-import {LoomExtension} from '../components/promptResponse/loomExtension'
-import {TiptapLinkExtension} from '../components/promptResponse/TiptapLinkExtension'
+import {LoomExtension} from '../components/TipTapEditor/LoomExtension'
+import {TiptapLinkExtension} from '../components/TipTapEditor/TiptapLinkExtension'
+import {SafeTextStyleKit} from '../shared/tiptap/extensions/SafeTextStyleKit'
+import {SubscriptSuperscriptKit} from '../shared/tiptap/extensions/SubscriptSuperscriptKit'
 import {mentionConfig} from '../shared/tiptap/serverTipTapExtensions'
 import {ClearOnSubmit} from '../tiptap/extensions/ClearOnSubmit'
+import {PopoverMention} from '../tiptap/extensions/popoverMention/PopoverMention'
+import {MentionTaskTag} from '../utils/MentionTaskTag'
 import {tiptapEmojiConfig} from '../utils/tiptapEmojiConfig'
 import {tiptapMentionConfig} from '../utils/tiptapMentionConfig'
 import {tiptapTagConfig} from '../utils/tiptapTagConfig'
-import {useTipTapEditorContent} from './useTipTapEditorContent'
+import {useTipTapEditorSync} from './useTipTapEditorSync'
 
 const isValid = <T>(obj: T | undefined | null | boolean): obj is T => {
   return !!obj
@@ -29,15 +34,18 @@ export const useTipTapCommentEditor = (
   }
 ) => {
   const {atmosphere, teamId, readOnly, placeholder, onEnter, onEscape} = options
-  const [contentJSON, editorRef] = useTipTapEditorContent(content)
+  const contentJSON = useMemo(() => JSON.parse(content) as JSONContent, [content])
   const placeholderRef = useRef(placeholder)
   // Keeping it in a ref means we don't have to re-initialize the editor, so content is preserved
   placeholderRef.current = placeholder
-  editorRef.current = useEditor(
+  const editor = useEditor(
     {
       content: contentJSON,
       extensions: [
         StarterKit.configure({link: false}),
+        Highlight,
+        SubscriptSuperscriptKit,
+        SafeTextStyleKit,
         LoomExtension,
         Placeholder.configure({
           showOnlyWhenEditable: false,
@@ -45,7 +53,8 @@ export const useTipTapCommentEditor = (
             return placeholderRef.current || 'Edit your comment'
           }
         }),
-        Mention.extend({name: 'taskTag'}).configure(tiptapTagConfig),
+        PopoverMention,
+        MentionTaskTag.configure(tiptapTagConfig),
         Mention.configure(
           atmosphere && teamId ? tiptapMentionConfig(atmosphere, teamId) : mentionConfig
         ),
@@ -74,7 +83,8 @@ export const useTipTapCommentEditor = (
       ].filter(isValid),
       editable: !readOnly
     },
-    [readOnly]
+    []
   )
-  return {editor: editorRef.current}
+  useTipTapEditorSync(editor, contentJSON, !readOnly)
+  return {editor}
 }

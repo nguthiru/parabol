@@ -1,12 +1,12 @@
 import type * as React from 'react'
-import {type Reducer, useCallback, useMemo, useReducer} from 'react'
+import {useCallback, useMemo, useReducer} from 'react'
 import type Legitity from '../validation/Legitity'
 import useEventCallback from './useEventCallback'
 
 interface FieldInputDict {
   [name: string]: {
     getDefault(): any
-    validate?(rawInput: any): Legitity
+    validate?(rawInput: any, otherRawInputs: {[name: string]: any}): Legitity
     normalize?(rawInput: any, previousValue: any): any
   }
 }
@@ -77,7 +77,7 @@ const reducer = <T,>(state: FieldState<T>, action: FormAction<FieldStateKey<T>>)
 }
 
 const useForm = <T extends FieldInputDict>(fieldInputDict: T, deps: any[] = []) => {
-  const [state, dispatch] = useReducer<Reducer<FieldState<T>, FormAction<FieldStateKey<T>>>>(
+  const [state, dispatch] = useReducer<FieldState<T>, [FormAction<FieldStateKey<T>>]>(
     reducer,
     useMemo(
       () =>
@@ -114,7 +114,13 @@ const useForm = <T extends FieldInputDict>(fieldInputDict: T, deps: any[] = []) 
   const validate = useEventCallback((name: string, value: any) => {
     const validateField = fieldInputDict[name]!.validate
     if (!validateField) return {error: undefined, value}
-    const res: Legitity = validateField(value)
+    const res: Legitity = validateField(
+      value,
+      Object.keys(state).reduce((obj, name) => {
+        obj[name] = state[name as FieldStateKey<T>].value
+        return obj
+      }, {} as any)
+    )
     dispatch({type: 'setError', name, error: res.error})
     return res
   })
@@ -144,13 +150,15 @@ const useForm = <T extends FieldInputDict>(fieldInputDict: T, deps: any[] = []) 
   const setValue = useEventCallback((name: FieldStateKey<T>, value: string) => {
     dispatch({type: 'setValue', name, value})
   })
-  const onChange = useEventCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const {value} = e.target
-    const name = e.target.name
-    const normalizedValue = normalize(name, value)
-    setValue(name, normalizedValue)
-    validate(name, normalizedValue)
-  })
+  const onChange = useEventCallback(
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      const {value} = e.target
+      const name = e.target.name
+      const normalizedValue = normalize(name, value)
+      setValue(name, normalizedValue)
+      validate(name, normalizedValue)
+    }
+  )
 
   return {
     setDirtyField: setDirty,

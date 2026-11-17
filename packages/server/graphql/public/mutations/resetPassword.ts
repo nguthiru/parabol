@@ -1,0 +1,92 @@
+import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
+import {GraphQLError} from 'graphql'
+import {Security, Threshold} from 'parabol-client/types/constEnums'
+import sleep from 'parabol-client/utils/sleep'
+import {AuthIdentityTypeEnum} from '../../../../client/types/constEnums'
+import type AuthIdentityLocal from '../../../database/types/AuthIdentityLocal'
+import AuthToken from '../../../database/types/AuthToken'
+import getKysely from '../../../postgres/getKysely'
+import {getUserByEmail} from '../../../postgres/queries/getUsersByEmails'
+import updateUser from '../../../postgres/queries/updateUser'
+import {setAuthCookie} from '../../../utils/authCookie'
+import {blacklistJWT} from '../../../utils/blacklistJWT'
+import {toEpochSeconds} from '../../../utils/epochTime'
+import loadPasswordStrength from '../../../utils/loadPasswordStrength'
+import type {MutationResolvers} from '../resolverTypes'
+import userErrorResult from './helpers/userErrorResult'
+
+const resetPassword: MutationResolvers['resetPassword'] = async (
+  _source,
+  {token, newPassword},
+  context
+) => {
+  if (process.env.AUTH_INTERNAL_DISABLED === 'true') {
+    throw new GraphQLError('Resetting password is disabled', {
+      extensions: {code: 'NOT_IMPLEMENTED'}
+    })
+  }
+  const pg = getKysely()
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex')
+  const resetRequest = await pg
+    .selectFrom('PasswordResetRequest')
+    .selectAll()
+    .where('tokenHash', '=', tokenHash)
+    .executeTakeFirst()
+
+  if (!resetRequest) {
+    return userErrorResult('TOKEN_INVALID', 'Invalid reset token')
+  }
+
+  const {id: resetRequestId, email, time, isValid} = resetRequest
+  const isExpired = time.getTime() + Threshold.RESET_PASSWORD_LIFESPAN < Date.now()
+  if (isExpired || !isValid) {
+    return userErrorResult('TOKEN_EXPIRED', 'Reset token expired')
+  }
+
+  // token is legit, let's invalidate it & set the new password
+  const user = await getUserByEmail(email)
+  if (!user) {
+    throw new GraphQLError(`User ${email} does not exist for password reset`, {
+      extensions: {code: 'NOT_FOUND'}
+    })
+  }
+  const passwordStrength = await loadPasswordStrength()
+  const weakError = passwordStrength(newPassword, email)
+  if (weakError) {
+    return userErrorResult('PASSWORD_TOO_WEAK', weakError, {field: 'newPassword'})
+  }
+
+  const {id: userId, identities, rol} = user
+  const localIdentity = identities.find(
+    (identity) => identity.type === AuthIdentityTypeEnum.LOCAL
+  ) as AuthIdentityLocal
+  if (!localIdentity) {
+    throw new GraphQLError(`User ${email} does not have a local identity`, {
+      extensions: {code: 'CONFLICT'}
+    })
+  }
+  await pg
+    .updateTable('PasswordResetRequest')
+    .set({isValid: false})
+    .where('id', '=', resetRequestId)
+    .execute()
+
+  // MUTATIVE
+  localIdentity.hashedPassword = await bcrypt.hash(newPassword, Security.SALT_ROUNDS)
+  localIdentity.isEmailVerified = true
+  await Promise.all([
+    updateUser({identities: identities.map((id) => JSON.stringify(id))}, userId),
+    pg.deleteFrom('FailedAuthRequest').where('email', '=', email).execute()
+  ])
+  // blacklist slightly into the future to avoid races
+  await blacklistJWT(userId, toEpochSeconds(new Date()) + 2, context.socketId)
+  // wait to ensure all previous tokens are blacklisted
+  await sleep(2000)
+  const tms = await context.dataLoader.get('teamIdsByUserId').load(userId)
+  context.authToken = new AuthToken({sub: userId, tms, rol})
+  setAuthCookie(context, context.authToken)
+  return {userId}
+}
+
+export default resetPassword

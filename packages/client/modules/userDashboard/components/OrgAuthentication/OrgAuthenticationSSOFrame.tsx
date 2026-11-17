@@ -1,112 +1,58 @@
-import styled from '@emotion/styled'
-import {Add, Check} from '@mui/icons-material'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
-import type {OrgAuthenticationSSOFrame_saml$key} from '../../../../__generated__/OrgAuthenticationSSOFrame_saml.graphql'
-import DialogTitle from '../../../../components/DialogTitle'
-import {PALETTE} from '../../../../styles/paletteV3'
+import {Add, Check} from '~/ui/icons'
+import type {OrgAuthenticationSSOFrame_samls$key} from '../../../../__generated__/OrgAuthenticationSSOFrame_samls.graphql'
 import {ExternalLinks} from '../../../../types/constEnums'
 
-const IconBlock = styled('div')({
-  padding: '0px 8px 0 8px'
-})
-
-const StyledAddIcon = styled(Add)({
-  color: PALETTE.SKY_500,
-  width: '24px',
-  height: '24px'
-})
-
-const StyledCheckIcon = styled(Check)({
-  color: PALETTE.SUCCESS_LIGHT,
-  width: '24px',
-  height: '24px'
-})
-
-const ContentWrapper = styled('div')({
-  display: 'flex',
-  flexDirection: 'row',
-  border: `1px solid ${PALETTE.SLATE_500}`,
-  borderRadius: '4px',
-  padding: '4px 8px 4px '
-})
-
-const SSOEnabledLabelBlock = styled('div')({
-  display: 'flex',
-  flexDirection: 'column'
-})
-
-const SubTitle = styled(DialogTitle)({
-  color: PALETTE.SLATE_700,
-  fontSize: '16px',
-  padding: 0
-})
-
-const SSOEnabledLabel = styled('span')({
-  color: PALETTE.SLATE_700,
-  fontSize: '14px'
-})
-
-const ContactLink = styled('a')({
-  fontSize: '14px',
-  fontWeight: 600,
-  color: PALETTE.SKY_500,
-  '&:focus, &:active': {
-    color: PALETTE.SKY_500
-  }
-})
-
 interface Props {
-  samlRef: OrgAuthenticationSSOFrame_saml$key | null
+  samlsRef: OrgAuthenticationSSOFrame_samls$key
 }
 
 const OrgAuthenticationSSOFrame = (props: Props) => {
-  const {samlRef} = props
-  const saml = useFragment(
+  const {samlsRef} = props
+  const samls = useFragment(
     graphql`
-      fragment OrgAuthenticationSSOFrame_saml on SAML {
-        id
-        domains
+      fragment OrgAuthenticationSSOFrame_samls on SAML @relay(plural: true) {
+        metadataURL
       }
     `,
-    samlRef
+    samlsRef
   )
-  const disabled = !saml
-  const domains: readonly string[] = saml?.domains ?? []
+  const total = samls.length
+  const activeCount = samls.filter(({metadataURL}) => metadataURL).length
+  const disabled = total === 0
+  const title = disabled
+    ? 'Enable SSO'
+    : total === 1
+      ? 'SSO Enabled'
+      : `SSO Enabled · ${activeCount} of ${total} identity providers active`
 
   return (
-    <div className='px-6 pb-8'>
-      <ContentWrapper>
-        <IconBlock>{disabled ? <StyledAddIcon /> : <StyledCheckIcon />}</IconBlock>
-        <SSOEnabledLabelBlock>
-          <SubTitle>{disabled ? 'Enable SSO' : 'SSO Enabled'}</SubTitle>
-          <SSOEnabledLabel>
-            <ContactLink
-              href={`${ExternalLinks.CONTACT}?subject=${
-                disabled ? 'Enable SSO' : 'Update Email Domains'
-              }`}
-              title={'Contact customer success to enable SSO'}
+    <div className='px-6 pb-6'>
+      <div className='flex flex-row rounded border border-hairline-field px-2 py-1'>
+        <div className='px-2'>
+          {disabled ? (
+            <Add className='h-6 w-6 text-accent' />
+          ) : (
+            <Check className='h-6 w-6 text-jade-500' />
+          )}
+        </div>
+        <div className='flex min-w-0 flex-1 flex-col'>
+          <span className='font-semibold text-base text-fg-primary'>{title}</span>
+          <span className='text-fg-primary text-sm'>
+            {!disabled &&
+              'People sign in with the identity provider that owns their email domain. '}
+            <a
+              className='font-semibold text-accent text-sm focus:text-accent active:text-accent'
+              href={`${ExternalLinks.CONTACT}?subject=${disabled ? 'Enable SSO' : 'Update Identity Providers'}`}
+              title={'Contact customer success'}
             >
               Contact customer success
-            </ContactLink>{' '}
-            {disabled ? 'to enable SSO' : 'to update email domains'}
-          </SSOEnabledLabel>
-          <div className={'flex flex-wrap gap-2 pt-2 pb-1 empty:hidden'}>
-            {domains.map((domain) => {
-              return (
-                <div
-                  key={domain}
-                  className={
-                    'bg w-max select-none rounded-full bg-slate-200 px-3 py-1 font-semibold text-slate-800 text-xs'
-                  }
-                >
-                  {domain}
-                </div>
-              )
-            })}
-          </div>
-        </SSOEnabledLabelBlock>
-      </ContentWrapper>
+            </a>{' '}
+            {disabled ? 'to enable SSO' : 'to add an identity provider or change email domains.'}
+          </span>
+        </div>
+      </div>
     </div>
   )
 }

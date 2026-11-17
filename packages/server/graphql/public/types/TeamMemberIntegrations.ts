@@ -15,14 +15,15 @@ const TeamMemberIntegrations: TeamMemberIntegrationsResolvers = {
 
   atlassian: async ({teamId, userId}, _args, {authToken, dataLoader}) => {
     if (!isTeamMember(authToken, teamId)) return null
-    return dataLoader.get('freshAtlassianAuth').load({teamId, userId})
+    return dataLoader.get('atlassianAuth').load({teamId, userId})
   },
 
   jiraServer: (source) => source,
 
   github: async ({teamId, userId}, _args, {authToken, dataLoader}) => {
     if (!isTeamMember(authToken, teamId)) return null
-    return dataLoader.get('githubAuth').load({teamId, userId})
+    const res = await dataLoader.get('githubAuth').load({teamId, userId})
+    return res || null
   },
 
   gitlab: (source) => source,
@@ -36,7 +37,10 @@ const TeamMemberIntegrations: TeamMemberIntegrationsResolvers = {
 
   azureDevOps: (source) => source,
   msTeams: (source) => source,
-  linear: (source) => source
+  linear: (source) => source,
+  clickup: (source) => source,
+  gmeet: ({teamId, userId}) => ({teamId, userId}),
+  zoom: ({teamId, userId}) => ({teamId, userId})
 }
 
 export default TeamMemberIntegrations

@@ -1,6 +1,0 @@
-type UserPreview implements UserPartial {
-  id: ID!
-  email: Email!
-  preferredName: String!
-  picture: URL!
-}

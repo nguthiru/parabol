@@ -1,0 +1,377 @@
+# Permissions Migration Plan
+
+Tracking checklist for centralizing all GraphQL permissions into `permissions.ts`.
+
+Items already in `permissions.ts` with specific rules (beyond the `'*': isAuthenticated` wildcard) are marked `[x]`.
+
+---
+
+## Mutations
+
+- [x] acceptTeamInvitation
+- [ ] acceptRequestToJoinDomain — auth checks viewer is team lead of any of the provided `teamIds` AND that team's org has a matching `activeDomain`; too complex for existing rules
+- [x] addAtlassianAuth — extracted `isTeamMember('args.teamId')`
+- [x] addComment — extracted `isMeetingMember('args.comment.discussionId', 'discussions')`
+- [x] addGitHubAuth — extracted `isTeamMember('args.teamId')`
+- [ ] addIntegrationProvider — conditional auth based on `args.input.scope` value (global/org/team); too complex for existing rules
+- [x] addAgendaItem
+- [x] addApprovedOrganizationDomains
+- [x] addOrg
+- [x] addPokerTemplate — extracted `isTeamMember('args.teamId')`
+- [x] addPokerTemplateDimension — extracted `isViewerOnTeam(getTeamIdFromArgTemplateId)` (templateId → teamId lookup); kept template existence check inline
+- [x] addPokerTemplateScale — extracted `isTeamMember('args.teamId')`
+- [x] addPokerTemplateScaleValue — extracted `isTeamMember('args.scaleId', 'templateScales')`
+- [x] addReactjiToReactable
+- [x] addReflectTemplate — extracted `isTeamMember('args.teamId')`; secondary template-scope check stays inline
+- [x] addReflectTemplatePrompt — extracted `isViewerOnTeam(getTeamIdFromArgTemplateId)`; kept template existence check inline
+- [x] addSlackAuth — extracted `isTeamMember('args.teamId')`
+- [x] addTeam
+- [x] addTeamMemberIntegrationAuth — extracted `isTeamMember('args.teamId')`
+- [x] addTranscriptionBot — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] archiveOrganization — extracted `or(isSuperUser, isViewerBillingLeader('args.orgId'))`
+- [x] archivePage
+- [x] archiveTeam — `or(isTeamLead, isSuperUser, isOrgAdmin)`
+- [ ] archiveTimelineEvent — conditional auth (only for meeting events); teamId from event lookup; not extractable
+- [x] autogroup — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [ ] batchArchiveTasks — per-item auth (task owner or team member); no single top-level gatekeeper
+- [x] changeTaskTeam — extracted `isTeamMember('args.teamId')`; secondary check on `oldTeamId` stays inline
+- [x] createImposterToken
+- [x] createOAuth1AuthorizeUrl — extracted `isTeamMember('args.teamId')`
+- [x] createOAuthAPIProvider
+- [x] createPage
+- [x] createPoll — extracted `isTeamMember('args.newPoll.discussionId', 'discussions')`
+- [x] createReflection
+- [x] createStripeSubscription
+- [x] createTask — extracted `isTeamMember('args.newTask.teamId')`
+- [x] createTaskIntegration — extracted `isTeamMember('args.taskId', 'tasks')`
+- [x] deleteComment — extracted `isMeetingMember('args.meetingId')`
+- [x] deleteOAuthAPIProvider
+- [x] deleteTask — extracted `isTeamMember('args.taskId', 'tasks')`
+- [ ] deleteUser — complex: `or(isSuperUser, viewerDeletesSelf)` with re-auth time check
+- [x] denyPushInvitation
+- [x] disconnectSAML
+- [x] dismissNewFeature — no auth check beyond `isAuthenticated` wildcard
+- [x] dismissSuggestedAction — viewer-ownership check; no existing rule
+- [x] downgradeToStarter — extracted `or(isSuperUser, isViewerBillingLeader('args.orgId'))`
+- [x] dragDiscussionTopic — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] dragEstimatingTask — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] editCommenting — extracted `isMeetingMember('args.discussionId', 'discussions')`
+- [x] editReflection — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] editTask — extracted `isTeamMember('args.taskId', 'tasks')`
+- [x] emailPasswordReset
+- [ ] embedUserAsset — uses `validateScope()`; complex scope-based auth
+- [x] endCheckIn — extracted `or(isTeamMemberOfMeeting('args.meetingId'), isSuperUser)`
+- [x] endDraggingReflection
+- [x] endRetrospective — extracted `or(isTeamMemberOfMeeting('args.meetingId'), isSuperUser)`
+- [x] endSprintPoker — extracted `or(isTeamMemberOfMeeting('args.meetingId'), isSuperUser)`
+- [x] endTeamPrompt — extracted `or(isTeamMemberOfMeeting('args.meetingId'), isSuperUser)`
+- [x] flagReadyToAdvance — extracted `isMeetingMember('args.meetingId')`
+- [x] generateInsight
+- [x] generateRetroSummaries — mutation deleted
+- [x] invalidateSessions — no auth beyond `isAuthenticated` wildcard
+- [x] inviteToTeam
+- [x] joinMeeting — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] joinTeam
+- [x] linkMattermostChannel — extracted `isTeamMember('args.teamId')`
+- [x] loginWithGoogle
+- [x] loginWithMicrosoft
+- [x] loginWithPassword
+- [x] modifyCheckInQuestion — extracted `isMeetingFacilitator('args.meetingId')`
+- [x] movePokerTemplateDimension — extracted `isTeamMember('args.dimensionId', 'templateDimensions')`
+- [x] movePokerTemplateScaleValue — extracted `isTeamMember('args.scaleId', 'templateScales')`
+- [x] moveReflectTemplatePrompt — extracted `isTeamMember('args.promptId', 'reflectPrompts')`
+- [x] moveTeamToOrg
+- [x] navigateMeeting — extracted `isMeetingFacilitator('args.meetingId')`
+- [x] persistIntegrationSearchQuery — extracted `isTeamMember('args.teamId')`
+- [x] pokerAnnounceDeckHover — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] pokerResetDimension — extracted `isMeetingFacilitator('args.meetingId')`
+- [x] pokerRevealVotes — extracted `isMeetingFacilitator('args.meetingId')`
+- [x] pokerTemplateDimensionUpdateDescription — extracted `isTeamMember('args.dimensionId', 'templateDimensions')`
+- [x] promoteNewMeetingFacilitator — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] promoteToTeamLead
+- [x] pushInvitation
+- [x] reflectTemplatePromptUpdateDescription — extracted `isTeamMember('args.promptId', 'reflectPrompts')`
+- [x] reflectTemplatePromptUpdateGroupColor — extracted `isTeamMember('args.promptId', 'reflectPrompts')`
+- [x] refreshSession — no auth check; covered by wildcard
+- [x] regenerateOAuthAPIProviderSecret — extracted `hasProviderAccess('args.providerId')`
+- [x] removeAgendaItem — extracted `isTeamMember('args.agendaItemId', 'agendaItems')`
+- [x] removeApprovedOrganizationDomains
+- [x] removeAtlassianAuth — extracted `isTeamMember('args.teamId')`
+- [x] removeGitHubAuth — extracted `isTeamMember('args.teamId')`
+- [ ] removeIntegrationProvider — conditional auth based on scope (global/org/team); skip
+- [x] removeIntegrationSearchQuery
+- [ ] removeOrgUsers — conditional self/billing-leader/org-admin; skip
+- [x] removePokerTemplate
+- [x] removePokerTemplateDimension — extracted `isTeamMember('args.dimensionId', 'templateDimensions')`
+- [x] removePokerTemplateScale — extracted `isTeamMember('args.scaleId', 'templateScales')`
+- [x] removePokerTemplateScaleValue — extracted `isTeamMember('args.scaleId', 'templateScales')`
+- [x] removeReflectTemplate
+- [x] removeReflectTemplatePrompt — extracted `isTeamMember('args.promptId', 'reflectPrompts')`
+- [x] removeReflection
+- [x] removeSlackAuth — extracted `isTeamMember('args.teamId')`
+- [x] removeTeamMember
+- [x] removeTeamMemberIntegrationAuth — extracted `isTeamMember('args.teamId')`
+- [x] renameMeeting — extracted `isMeetingFacilitator('args.meetingId')`
+- [x] renameMeetingTemplate
+- [x] renamePokerTemplateDimension — extracted `isTeamMember('args.dimensionId', 'templateDimensions')`
+- [x] renamePokerTemplateScale — extracted `isTeamMember('args.scaleId', 'templateScales')`
+- [x] renameReflectTemplatePrompt — extracted `isTeamMember('args.promptId', 'reflectPrompts')`
+- [x] requestPageAccess — no auth check beyond wildcard; skip
+- [x] requestToJoinDomain — no auth check beyond wildcard; skip
+- [x] resetPassword
+- [x] resetReflectionGroups — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] resetRetroMeetingToGroupStage — extracted `isMeetingFacilitator('args.meetingId')`
+- [x] revealTeamHealthVotes
+- [x] selectTemplate
+- [x] setDefaultSlackChannel
+- [x] setJiraDisplayFieldIds
+- [x] setMeetingMusic
+- [x] setMeetingSettings
+- [x] setNotificationStatus
+- [x] setOrgUserRole
+- [x] setPhaseFocus
+- [x] setPokerSpectate
+- [x] setSlackNotification
+- [x] setStageTimer
+- [x] setTaskEstimate
+- [x] setTaskHighlight
+- [x] setTeamHealthVote
+- [ ] setTeamNotificationSetting — args.id is a GraphQL composite ID requiring `TeamNotificationSettingsId.split()` before dataloader lookup; not directly expressible as a rule
+- [x] shareTopic
+- [x] signOut
+- [x] signUpWithPassword
+- [x] startCheckIn
+- [x] startDraggingReflection
+- [x] startRetrospective
+- [x] startSprintPoker
+- [x] startTeamPrompt
+- [x] toggleAIFeatures
+- [x] toggleFavoriteTemplate
+- [ ] toggleFeatureFlag — tri-conditional auth (orgId → org admin, teamId → team lead, userId → self); too complex for a single rule
+- [x] togglePageInvitationEmail
+- [x] toggleSummaryEmail
+- [x] toggleTeamDrawer
+- [x] toggleTeamPrivacy
+- [ ] ungroupReflection — both args optional; meetingId must be resolved from whichever arg is provided before team check; not expressible as a single rule
+- [x] unlinkMattermostChannel
+- [x] updateAgendaItem
+- [ ] updateAutoJoin — checks billing leader for ALL teams in array; no single top-level gatekeeper
+- [x] updateAzureDevOpsDimensionField
+- [x] updateCommentContent
+- [x] updateCreditCard
+- [x] updateDragLocation
+- [x] updateGitHubDimensionField
+- [x] updateGitLabDimensionField
+- [ ] updateIntegrationProvider
+- [x] updateJiraDimensionField
+- [x] updateJiraServerDimensionField
+- [x] updateLinearDimensionField
+- [x] updateMeetingPrompt
+- [x] updateMeetingTemplate
+- [x] updateNewCheckInQuestion
+- [x] updateOAuthAPIProvider
+- [x] updateOrg
+- [x] updatePage
+- [x] updatePageAccess
+- [x] updatePageParentLink
+- [x] updatePokerScope
+- [x] updatePokerTemplateDimensionScale
+- [x] updatePokerTemplateScaleValue
+- [x] updateRecurrenceSettings
+- [x] updateReflectionContent — extracted `isTeamMemberOfMeeting('args.reflectionId', 'retroReflections')`; creator check stays inline
+- [x] updateReflectionGroupTitle — extracted `isTeamMemberOfMeeting('args.reflectionGroupId', 'retroReflectionGroups')`
+- [x] updateRetroMaxVotes — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] updateSCIM
+- [x] updateTask — extracted `isTeamMember('args.updatedTask.id', 'tasks')`
+- [x] updateTaskDueDate — extracted `isTeamMember('args.taskId', 'tasks')`
+- [x] updateTeamName — extracted `isTeamMember('args.updatedTeam.id')`
+- [x] updateTeamSortOrder
+- [x] updateTemplateCategory
+- [ ] updateTemplateScope — `or(isTeamMember, isOrgAdmin)` where orgId comes from template entity, not directly from args; `hasOrgRole` has no loader support
+- [x] updateUserProfile — removed redundant `isAuthenticated` inline check; covered by `'*': isAuthenticated` wildcard
+- [x] uploadIdPMetadata
+- [x] uploadOrgImage — extracted `isViewerBillingLeader('args.orgId')`
+- [ ] uploadUserAsset — complex scope-based auth via `validateScope()`; skip
+- [x] uploadUserImage — removed redundant `isAuthenticated` inline check; covered by wildcard
+- [x] upsertTeamPromptResponse — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] verifyEmail
+- [x] voteForPokerStory — extracted `isTeamMemberOfMeeting('args.meetingId')`
+- [x] voteForReflectionGroup — extracted `isTeamMemberOfMeeting('args.reflectionGroupId', 'retroReflectionGroups')`
+
+---
+
+## Queries
+
+- [ ] getDemoGroupTitle *(has rateLimit)*
+- [x] massInvitation *(has rateLimit)*
+- [x] public *(has rateLimit)*
+- [x] SAMLIdP *(has rateLimit)*
+- [ ] searchGifs
+- [ ] verifiedInvitation *(has rateLimit)*
+- [ ] viewer
+
+---
+
+## Types (excluding *Payload / *Success)
+
+- [ ] AIPrompt
+- [ ] ActionMeeting
+- [ ] ActionMeetingMember
+- [ ] ActionMeetingSettings
+- [ ] AddedNotification
+- [ ] AgendaItem
+- [ ] AgendaItemsPhase
+- [ ] AgendaItemsStage
+- [ ] AtlassianIntegration
+- [ ] AuthIdentityGoogle
+- [ ] AuthIdentityLocal
+- [ ] AuthIdentityMicrosoft
+- [ ] AzureDevOpsIntegration
+- [ ] AzureDevOpsRemoteProject
+- [ ] AzureDevOpsSearchQuery
+- [ ] AzureDevOpsWorkItem
+- [ ] CheckInPhase
+- [ ] CheckInStage
+- [ ] Comment
+- [ ] Company
+- [ ] DateTime
+- [ ] DiscussPhase
+- [ ] Discussion
+- [ ] DiscussionThreadStage
+- [ ] DomainJoinRequest
+- [ ] Email
+- [ ] EstimatePhase
+- [ ] EstimateStage
+- [ ] EstimateUserScore
+- [ ] File
+- [ ] FixedActivity
+- [ ] GcalIntegration
+- [ ] GenericMeetingPhase
+- [ ] GenericMeetingStage
+- [ ] GifResponse
+- [ ] GitHubIntegration
+- [ ] GitHubSearchQuery
+- [ ] GitLabIntegration
+- [ ] IntegrationProvider
+- [ ] IntegrationProviderOAuth1
+- [ ] IntegrationProviderOAuth2
+- [ ] IntegrationProviderWebhook
+- [ ] JiraIssue
+- [ ] JiraRemoteAvatarUrls
+- [ ] JiraRemoteProject
+- [ ] JiraSearchQuery
+- [ ] JiraServerIntegration
+- [ ] JiraServerIssue
+- [ ] JiraServerRemoteProject
+- [ ] LinearIntegration
+- [ ] MSTeamsIntegration
+- [ ] MattermostIntegration
+- [ ] MeetingMember
+- [ ] MeetingSeries
+- [ ] MeetingTemplate
+- [ ] NewFeatureBroadcast
+- [ ] NewMeeting
+- [ ] NewMeetingPhase
+- [ ] NewMeetingStage
+- [ ] NewMeetingTeamMemberStage
+- [ ] NotificationMeetingStageTimeLimitEnd
+- [ ] NotificationTeamInvitation
+- [ ] NotifyDiscussionMentioned
+- [ ] NotifyKickedOut
+- [ ] NotifyMentioned
+- [ ] NotifyPageAccessGranted
+- [ ] NotifyPageAccessRequested
+- [ ] NotifyPaymentRejected
+- [ ] NotifyPromoteToOrgLeader
+- [ ] NotifyPromptToJoinOrg
+- [ ] NotifyRequestToJoinOrg
+- [ ] NotifyResponseMentioned
+- [ ] NotifyResponseReplied
+- [ ] NotifyTaskInvolves
+- [ ] NotifyTeamArchived
+- [ ] NotifyTeamsLimitExceeded
+- [ ] NotifyTeamsLimitReminder
+- [ ] OAuthAPIProvider
+- [ ] OAuthScopeEnum
+- [x] Organization *(oauthAPIProvider, saml, samls)*
+- [ ] OrgIntegrationProviders
+- [ ] OrganizationUser
+- [x] Page *(parentPage)*
+- [ ] PageAccess
+- [ ] PageAccessOrganization
+- [ ] PageAccessRequest
+- [ ] PageAccessTeam
+- [ ] PageAccessUser
+- [ ] PagePartial
+- [x] PublicRoot *(page)*
+- [ ] PokerMeeting
+- [ ] PokerMeetingMember
+- [ ] PokerMeetingSettings
+- [ ] Poll
+- [ ] PollOption
+- [ ] RRule
+- [ ] Reactable
+- [ ] Reactji
+- [ ] RedirectURI
+- [ ] ReflectPhase
+- [ ] ReflectPrompt
+- [ ] ReflectTemplate
+- [ ] RemoteReflectionDrag
+- [ ] RetroDiscussStage
+- [ ] RetroReflection
+- [x] RetroReflectionGroup *(smartTitle, voterIds)*
+- [ ] RetrospectiveMeeting
+- [ ] RetrospectiveMeetingMember
+- [ ] RetrospectiveMeetingSettings
+- [ ] SAML
+- [ ] SearchResultEdge
+- [ ] SlackIntegration
+- [ ] SlackNotification
+- [ ] SuggestedActionCreateNewTeam
+- [ ] SuggestedActionInviteYourTeam
+- [ ] SuggestedActionTryActionMeeting
+- [ ] SuggestedActionTryRetroMeeting
+- [ ] SuggestedActionTryTheDemo
+- [ ] Task
+- [ ] TaskEstimate
+- [x] Team *(massInvitation)*
+- [ ] TeamHealthPhase
+- [ ] TeamHealthStage
+- [ ] TeamInvitation
+- [ ] TeamMember
+- [ ] TeamMemberIntegrationAuthOAuth1
+- [ ] TeamMemberIntegrationAuthOAuth2
+- [ ] TeamMemberIntegrationAuthWebhook
+- [ ] TeamMemberIntegrations
+- [ ] TeamNotificationSettings
+- [ ] TeamPromptMeeting
+- [ ] TeamPromptMeetingMember
+- [ ] TeamPromptMeetingSettings
+- [ ] TeamPromptResponse
+- [ ] TeamPromptResponseStage
+- [ ] TeamPromptResponsesPhase
+- [ ] TemplateDimension
+- [ ] TemplateDimensionRef
+- [ ] TemplateScale
+- [ ] TemplateScaleRef
+- [ ] TemplateScaleValue
+- [ ] Threadable
+- [ ] TimelineEvent
+- [ ] TimelineEventCompletedActionMeeting
+- [ ] TimelineEventCompletedRetroMeeting
+- [ ] TimelineEventJoinedParabol
+- [ ] TimelineEventPokerComplete
+- [ ] TimelineEventTeamCreated
+- [ ] TimelineEventTeamPromptComplete
+- [ ] URL
+- [ ] UpdatedNotification
+- [ ] UpdatesPhase
+- [ ] UpdatesStage
+- [x] User *(domains)*
+- [ ] _xGitHubIssue
+- [ ] _xGitHubPullRequest
+- [ ] _xGitHubRepository
+- [ ] _xGitLabProject
+- [ ] _xGitLabQuery
+- [ ] _xLinearProject
+- [ ] _xLinearTeam

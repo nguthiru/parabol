@@ -1,11 +1,11 @@
 import graphql from 'babel-plugin-relay/macro'
 import {Fragment, useState} from 'react'
 import {useFragment} from 'react-relay'
+import {useNavigate} from 'react-router'
 import type {
   NewMeetingPhaseTypeEnum,
   RetroMeetingSidebar_meeting$key
 } from '~/__generated__/RetroMeetingSidebar_meeting.graphql'
-import useRouter from '~/hooks/useRouter'
 import isDemoRoute from '~/utils/isDemoRoute'
 import useAtmosphere from '../hooks/useAtmosphere'
 import type useGotoStageId from '../hooks/useGotoStageId'
@@ -25,11 +25,15 @@ interface Props {
   meeting: RetroMeetingSidebar_meeting$key
 }
 
-const collapsiblePhases: NewMeetingPhaseTypeEnum[] = ['checkin', 'discuss']
+const collapsiblePhases: NewMeetingPhaseTypeEnum[] = ['checkin', 'updates', 'discuss']
+
+const retroPhaseLabelOverrides: Partial<Record<NewMeetingPhaseTypeEnum, string>> = {
+  updates: 'Review Tasks'
+}
 
 const RetroMeetingSidebar = (props: Props) => {
   const atmosphere = useAtmosphere()
-  const {history} = useRouter()
+  const navigate = useNavigate()
   const {viewerId} = atmosphere
   const {gotoStageId, handleMenuClick, toggleSidebar, meeting: meetingRef} = props
   const meeting = useFragment(
@@ -138,7 +142,11 @@ const RetroMeetingSidebar = (props: Props) => {
             <Fragment key={phaseType}>
               <NewMeetingSidebarPhaseListItem
                 handleClick={canNavigate ? handleClick : undefined}
-                isActive={phaseType === 'discuss' ? false : localPhaseType === phaseType}
+                isActive={
+                  phaseType === 'discuss' || phaseType === 'checkin' || phaseType === 'updates'
+                    ? false
+                    : localPhaseType === phaseType
+                }
                 isCollapsible={collapsiblePhases.includes(phaseType)}
                 isFacilitatorPhase={phaseType === facilitatorPhaseType}
                 isUnsyncedFacilitatorPhase={
@@ -147,6 +155,7 @@ const RetroMeetingSidebar = (props: Props) => {
                 isUnsyncedFacilitatorStage={isUnsyncedFacilitatorStage}
                 key={phaseType}
                 phaseCount={phaseCount}
+                phaseLabel={retroPhaseLabelOverrides[phaseType]}
                 phaseType={phaseType}
                 isConfirming={isViewerFacilitator && confirmingPhase === phaseType}
               />
@@ -167,12 +176,12 @@ const RetroMeetingSidebar = (props: Props) => {
             isUnsyncedFacilitatorPhase={false}
             handleClick={() => {
               if (isDemoRoute()) {
-                history.push('/retrospective-demo-summary')
+                navigate('/retrospective-demo-summary')
               } else {
                 const summaryURL = summaryPageId
                   ? `/pages/${GQLID.fromKey(summaryPageId)[0]}`
                   : `/new-summary/${meetingId}`
-                history.push(summaryURL)
+                navigate(summaryURL)
               }
             }}
             phaseType='SUMMARY'

@@ -1,8 +1,0 @@
-type InactivateUserPayload {
-  error: StandardMutationError
-
-  """
-  The user that has been inactivated
-  """
-  user: User
-}

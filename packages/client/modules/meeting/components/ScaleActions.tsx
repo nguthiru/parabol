@@ -1,4 +1,3 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import type * as React from 'react'
 import {commitLocalUpdate, useFragment} from 'react-relay'
@@ -10,20 +9,14 @@ import AddPokerTemplateScaleMutation from '../../../mutations/AddPokerTemplateSc
 import RemovePokerTemplateScaleMutation from '../../../mutations/RemovePokerTemplateScaleMutation'
 import {Threshold} from '../../../types/constEnums'
 
-const CloneAndDelete = styled('div')({
-  display: 'flex',
-  flexDirection: 'row'
-})
-
 interface Props {
   scale: ScaleActions_scale$key
   scaleCount: number
   teamId: string
-  closeMenu: () => void
 }
 
 const ScaleActions = (props: Props) => {
-  const {scale: scaleRef, scaleCount, teamId, closeMenu} = props
+  const {scale: scaleRef, scaleCount, teamId} = props
   const scale = useFragment(
     graphql`
       fragment ScaleActions_scale on TemplateScale {
@@ -52,9 +45,9 @@ const ScaleActions = (props: Props) => {
         {onError, onCompleted}
       )
     }
-    closeMenu()
   }
-  const editScale = () => {
+  const editScale = (e: React.MouseEvent) => {
+    e.stopPropagation()
     commitLocalUpdate(atmosphere, (store) => {
       store.get(teamId)?.setValue(scaleId, 'editingScaleId')
     })
@@ -66,7 +59,7 @@ const ScaleActions = (props: Props) => {
     RemovePokerTemplateScaleMutation(atmosphere, {scaleId}, {onError, onCompleted})
   }
   return (
-    <CloneAndDelete>
+    <div className='flex flex-row'>
       {isStarter ? (
         <DetailAction
           disabled={!canClone}
@@ -80,7 +73,7 @@ const ScaleActions = (props: Props) => {
           <DetailAction icon={'delete'} tooltip={'Delete scale'} onClick={deleteScale} />
         </>
       )}
-    </CloneAndDelete>
+    </div>
   )
 }
 export default ScaleActions

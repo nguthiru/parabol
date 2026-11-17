@@ -7,9 +7,9 @@ import type {RemoveOrgUsersMutation_notification$data} from '../__generated__/Re
 import type {RemoveOrgUsersMutation_task$data} from '../__generated__/RemoveOrgUsersMutation_task.graphql'
 import type {RemoveOrgUsersMutation_team$data} from '../__generated__/RemoveOrgUsersMutation_team.graphql'
 import type {
-  HistoryLocalHandler,
+  NavigateLocalHandler,
   OnNextHandler,
-  OnNextHistoryContext,
+  OnNextNavigateContext,
   SharedUpdater,
   StandardMutation
 } from '../types/relayMutations'
@@ -86,10 +86,10 @@ const mutation = graphql`
           message
         }
       }
-      ...RemoveOrgUsersMutation_organization @relay(mask: false)
-      ...RemoveOrgUsersMutation_team @relay(mask: false)
-      ...RemoveOrgUsersMutation_task @relay(mask: false)
-      ...RemoveOrgUsersMutation_notification @relay(mask: false)
+      ...RemoveOrgUsersMutation_organization @relay(mask: false) @alias
+      ...RemoveOrgUsersMutation_team @relay(mask: false) @alias
+      ...RemoveOrgUsersMutation_task @relay(mask: false) @alias
+      ...RemoveOrgUsersMutation_notification @relay(mask: false) @alias
     }
   }
 `
@@ -179,26 +179,26 @@ export const removeOrgUsersTeamOnNext: OnNextHandler<RemoveOrgUsersMutation_team
 
 export const removeOrgUsersOrganizationOnNext: OnNextHandler<
   RemoveOrgUsersMutation_organization$data,
-  OnNextHistoryContext
+  OnNextNavigateContext
 > = (payload, context) => {
   const {
     atmosphere: {viewerId},
-    history
+    navigate
   } = context
-  const {pathname} = history.location
+  const {pathname} = window.location
   const {removedUserIds, affectedOrganizationId} = payload
   if (
     removedUserIds.some((removedUserId) => removedUserId === viewerId) &&
     onExOrgRoute(pathname, affectedOrganizationId)
   ) {
-    history.push('/meetings')
+    navigate('/meetings')
   }
 }
 
 export const removeOrgUsersNotificationOnNext: OnNextHandler<
   RemoveOrgUsersMutation_notification$data,
-  OnNextHistoryContext
-> = (payload, {atmosphere, history}) => {
+  OnNextNavigateContext
+> = (payload, {atmosphere, navigate}) => {
   if (!payload) return
   const {
     affectedOrganizationId,
@@ -217,11 +217,11 @@ export const removeOrgUsersNotificationOnNext: OnNextHandler<
     })
 
     if (onMeetingRoute(window.location.pathname, affectedMeetingIds)) {
-      history.push('/meetings')
+      navigate('/meetings')
       return
     }
     if (affectedTeamIds.some((teamId) => onTeamRoute(window.location.pathname, teamId))) {
-      history.push('/meetings')
+      navigate('/meetings')
       return
     }
   } else {
@@ -234,10 +234,10 @@ export const removeOrgUsersNotificationOnNext: OnNextHandler<
   }
 }
 
-const RemoveOrgUsersMutation: StandardMutation<TRemoveOrgUsersMutation, HistoryLocalHandler> = (
+const RemoveOrgUsersMutation: StandardMutation<TRemoveOrgUsersMutation, NavigateLocalHandler> = (
   atmosphere,
   variables,
-  {history, onError, onCompleted}
+  {navigate, onError, onCompleted}
 ) => {
   return commitMutation<TRemoveOrgUsersMutation>(atmosphere, {
     mutation,
@@ -245,7 +245,7 @@ const RemoveOrgUsersMutation: StandardMutation<TRemoveOrgUsersMutation, HistoryL
     updater: (store) => {
       const payload = store.getRootField('removeOrgUsers')
       if (!payload) return
-      if (payload.getValue('error')) return
+      if (payload.getLinkedRecord('error')) return
 
       removeOrgUsersOrganizationUpdater(payload as any, {atmosphere, store})
       removeOrgUsersTeamUpdater(payload as any, {atmosphere, store})
@@ -256,15 +256,19 @@ const RemoveOrgUsersMutation: StandardMutation<TRemoveOrgUsersMutation, HistoryL
       if (onCompleted) {
         onCompleted(res, errors)
       }
-      const payload = res.removeOrgUsers
-      if (!payload || payload.error) return
+      const {
+        RemoveOrgUsersMutation_organization: organizationPayload,
+        RemoveOrgUsersMutation_team: teamPayload,
+        RemoveOrgUsersMutation_notification: notificationPayload
+      } = res.removeOrgUsers
+      if (!organizationPayload || !teamPayload || !notificationPayload) return
 
-      removeOrgUsersOrganizationOnNext(payload as any, {
-        history,
+      removeOrgUsersOrganizationOnNext(organizationPayload, {
+        navigate,
         atmosphere
       })
-      removeOrgUsersTeamOnNext(payload as any, {atmosphere})
-      removeOrgUsersNotificationOnNext(payload as any, {atmosphere, history})
+      removeOrgUsersTeamOnNext(teamPayload, {atmosphere})
+      removeOrgUsersNotificationOnNext(notificationPayload, {atmosphere, navigate})
     },
     onError
   })

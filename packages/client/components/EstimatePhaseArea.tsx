@@ -1,50 +1,14 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import type * as React from 'react'
 import {useRef} from 'react'
 import {useFragment} from 'react-relay'
-import SwipeableViews from 'react-swipeable-views'
 import type {EstimatePhaseArea_meeting$key} from '~/__generated__/EstimatePhaseArea_meeting.graphql'
 import useBreakpoint from '~/hooks/useBreakpoint'
 import type useGotoStageId from '~/hooks/useGotoStageId'
-import {PALETTE} from '~/styles/paletteV3'
 import {Breakpoint} from '~/types/constEnums'
 import EstimateDimensionColumn from './EstimateDimensionColumn'
 import PokerCardDeck from './PokerCardDeck'
-
-const EstimateArea = styled('div')({
-  overflow: 'hidden',
-  display: 'flex',
-  flexDirection: 'column',
-  flex: 1,
-  width: '100%'
-})
-
-const StepperDots = styled('div')({
-  display: 'flex',
-  justifyContent: 'center',
-  paddingTop: 4,
-  width: '100%'
-})
-
-const StepperDot = styled('div')<{isActive: boolean}>(({isActive}) => ({
-  backgroundColor: isActive ? PALETTE.GRAPE_700 : PALETTE.SLATE_600,
-  borderRadius: '50%',
-  height: 8,
-  margin: '0 2px',
-  opacity: isActive ? undefined : 0.35,
-  width: 8
-}))
-
-const SwipableEstimateItem = styled('div')<{isDesktop: boolean}>(({isDesktop}) => ({
-  background: PALETTE.SLATE_300,
-  borderRadius: '8px 8px 0 0',
-  flex: 1,
-  // padding-bottom allows the content to scroll out from under
-  // the hand of poker cards and the meeting bottom bar
-  // on mobile the cards and bottom bar have less height
-  paddingBottom: isDesktop ? 8 * 19 : 8 * 12
-}))
+import SwipeablePanel from './SwipeablePanel'
 
 const innerStyle = (isDesktop: boolean, hasSingleDimension: boolean): React.CSSProperties => {
   return {
@@ -63,10 +27,6 @@ const innerStyle = (isDesktop: boolean, hasSingleDimension: boolean): React.CSSP
   }
 }
 
-const containerStyle = {
-  height: '100%'
-}
-
 interface Props {
   gotoStageId: ReturnType<typeof useGotoStageId>
   meeting: EstimatePhaseArea_meeting$key
@@ -80,7 +40,7 @@ const EstimatePhaseArea = (props: Props) => {
         ...PokerCardDeck_meeting
         ...EstimateDimensionColumn_meeting
         localStage {
-          ...EstimatePhaseAreaStage @relay(mask: false)
+          ...EstimatePhaseAreaStage @relay(mask: false) @alias
         }
         phases {
           ... on EstimatePhase {
@@ -96,9 +56,12 @@ const EstimatePhaseArea = (props: Props) => {
     meetingRef
   )
   const {localStage, phases} = meeting
-  const {id: localStageId, taskId} = localStage
+  const estimateStage = localStage.EstimatePhaseAreaStage
+  const localStageId = estimateStage?.id
+  const taskId = estimateStage?.taskId
   const {stages} = phases.find(({phaseType}) => phaseType === 'ESTIMATE')!
-  const dimensionStages = stages!.filter((stage) => stage.taskId === taskId)
+  // The facilitator's navigation can reach the viewer before the stages it points to have loaded
+  const dimensionStages = taskId ? stages!.filter((stage) => stage.taskId === taskId) : []
   const stageIdx = dimensionStages!.findIndex(({id}) => id === localStageId)
   const isDesktop = useBreakpoint(Breakpoint.SIDEBAR_LEFT)
   const estimateAreaRef = useRef<HTMLDivElement>(null)
@@ -108,40 +71,53 @@ const EstimatePhaseArea = (props: Props) => {
     if (stageId) gotoStageId(stageId)
   }
 
-  const slideContainer = {
-    display: 'flex',
-    padding: isDesktop ? '0 8px' : '0 4px'
-  }
-
   const hasSingleDimension = dimensionStages.length === 1
 
   return (
-    <EstimateArea ref={estimateAreaRef}>
+    <div className='flex w-full flex-1 flex-col overflow-hidden' ref={estimateAreaRef}>
       {dimensionStages.length > 1 && (
-        <StepperDots>
+        <div className='flex w-full justify-center pt-1'>
           {dimensionStages.map((_, idx) => {
+            const isActive = idx === stageIdx
             return (
-              <StepperDot key={idx} isActive={idx === stageIdx} onClick={() => onChangeIdx(idx)} />
+              <div
+                key={idx}
+                className='mx-0.5 h-2 w-2 cursor-pointer rounded-full'
+                style={{
+                  backgroundColor: isActive
+                    ? 'var(--color-accent-active)'
+                    : 'var(--color-fg-muted)',
+                  opacity: isActive ? undefined : 0.35
+                }}
+                onClick={() => onChangeIdx(idx)}
+              />
             )
           })}
-        </StepperDots>
+        </div>
       )}
       <PokerCardDeck meeting={meeting} estimateAreaRef={estimateAreaRef} />
-      <SwipeableViews
-        containerStyle={containerStyle}
-        enableMouseEvents
+      <SwipeablePanel
         index={stageIdx}
         onChangeIndex={onChangeIdx}
-        slideStyle={slideContainer}
         style={innerStyle(isDesktop, hasSingleDimension)}
+        slideClassName='px-1'
       >
         {dimensionStages.map((stage, idx) => (
-          <SwipableEstimateItem isDesktop={isDesktop} key={idx}>
+          <div
+            key={idx}
+            className='h-full rounded-t-lg'
+            style={{
+              background: 'var(--color-surface-well)',
+              paddingLeft: isDesktop ? 8 : 4,
+              paddingRight: isDesktop ? 8 : 4,
+              paddingBottom: isDesktop ? 8 * 19 : 8 * 12
+            }}
+          >
             <EstimateDimensionColumn meeting={meeting} stage={stage} />
-          </SwipableEstimateItem>
+          </div>
         ))}
-      </SwipeableViews>
-    </EstimateArea>
+      </SwipeablePanel>
+    </div>
   )
 }
 

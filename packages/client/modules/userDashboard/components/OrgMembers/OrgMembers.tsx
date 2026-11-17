@@ -7,11 +7,9 @@ import {type PreloadedQuery, usePaginationFragment, usePreloadedQuery} from 'rea
 import type {OrgMembers_viewer$key} from '~/__generated__/OrgMembers_viewer.graphql'
 import type {OrgMembersPaginationQuery} from '~/__generated__/OrgMembersPaginationQuery.graphql'
 import type {OrgMembersQuery} from '~/__generated__/OrgMembersQuery.graphql'
-import type User from '../../../../../server/database/types/User'
-import {BATCH_ORG_USER_REMOVAL_LIMIT} from '../../../../../server/postgres/constants'
 import ExportToCSVButton from '../../../../components/ExportToCSVButton'
-import useModal from '../../../../hooks/useModal'
 import {APP_CORS_OPTIONS} from '../../../../types/cors'
+import {BATCH_ORG_USER_REMOVAL_LIMIT} from '../../../../utils/constants'
 import OrgMemberRow from '../OrgUserRow/OrgMemberRow'
 import RemoveFromOrgModal from '../RemoveFromOrgModal/RemoveFromOrgModal'
 
@@ -45,13 +43,13 @@ const OrgMembers = (props: Props) => {
                 cursor
                 node {
                   id
-                  inactive
                   role
                   user {
                     id
                     preferredName
                     email
                     lastSeenAt
+                    inactive
                   }
                   ...OrgMemberRow_organizationUser
                   ...RemoveFromOrgModal_organizationUsers
@@ -81,15 +79,11 @@ const OrgMembers = (props: Props) => {
     (count, {node}) => (['ORG_ADMIN'].includes(node.role ?? '') ? count + 1 : count),
     0
   )
-  const [sortBy, setSortBy] = useState<keyof User>('lastSeenAt')
+  const [sortBy, setSortBy] = useState<string>('lastSeenAt')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [searchInput, setSearchInput] = useState('')
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([])
-  const {
-    togglePortal: toggleBulkRemove,
-    modalPortal: bulkRemoveModal,
-    closePortal: closeBulkRemoveModal
-  } = useModal()
+  const [isBulkRemoveOpen, setIsBulkRemoveOpen] = useState(false)
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchInput(e.target.value)
@@ -123,7 +117,7 @@ const OrgMembers = (props: Props) => {
     })
   }, [filteredOrgUsers, sortBy, sortDirection])
 
-  const handleSort = (column: keyof User) => {
+  const handleSort = (column: string) => {
     if (sortBy === column) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
     } else {
@@ -181,7 +175,7 @@ const OrgMembers = (props: Props) => {
         Row: idx,
         Name: node.user.preferredName,
         Email: node.user.email,
-        Inactive: node.inactive,
+        Inactive: node.user.inactive,
         'Billing Lead': node.role === 'BILLING_LEADER',
         'Last Seen At': formattedLastSeenAt
       }
@@ -224,12 +218,12 @@ const OrgMembers = (props: Props) => {
           placeholder='Search by name or email'
           value={searchInput}
           onChange={handleSearchChange}
-          className='w-full rounded-md border border-slate-300 px-3 py-2 focus:border-blue-500 focus:outline-hidden focus:ring-1 focus:ring-blue-500'
+          className='w-full rounded-md border border-hairline px-3 py-2 focus:border-accent focus:outline-hidden focus:ring-1 focus:ring-accent'
         />
       </div>
 
-      <div className='divide-y divide-slate-300 overflow-hidden rounded-md border border-slate-300 bg-white shadow-xs'>
-        <div className='flex h-10 items-center bg-slate-100 px-4'>
+      <div className='divide-y divide-hairline overflow-hidden rounded-md border border-hairline bg-surface-card shadow-xs'>
+        <div className='flex h-10 items-center bg-surface-raised px-4'>
           <div className='flex w-full items-center justify-between'>
             <div className='flex items-center font-bold'>
               {searchInput
@@ -252,13 +246,13 @@ const OrgMembers = (props: Props) => {
                   <>
                     <button
                       onClick={exportToCSV}
-                      className='flex h-6 items-center rounded border border-slate-300 bg-slate-100 px-3 font-medium text-slate-700 text-xs hover:bg-slate-200'
+                      className='flex h-6 items-center rounded border border-hairline bg-surface-raised px-3 font-medium text-fg-primary text-xs hover:bg-surface-hover'
                     >
                       Export Selected to CSV
                     </button>
                     <button
-                      onClick={toggleBulkRemove}
-                      className='flex h-6 items-center rounded border border-slate-300 bg-slate-100 px-3 font-medium text-slate-700 text-xs hover:bg-slate-200'
+                      onClick={() => setIsBulkRemoveOpen(true)}
+                      className='flex h-6 items-center rounded border border-hairline bg-surface-raised px-3 font-medium text-fg-primary text-xs hover:bg-surface-hover'
                     >
                       Remove Selected
                     </button>
@@ -270,7 +264,7 @@ const OrgMembers = (props: Props) => {
         <div className='w-full overflow-x-auto px-4'>
           <table className='w-full table-fixed border-collapse md:table-auto'>
             <thead>
-              <tr className='border-slate-300 border-b'>
+              <tr className='border-hairline border-b'>
                 <th className='w-[5%] p-3 text-left'>
                   <div className='flex items-center justify-center'>
                     {isOrgAdmin && filteredOrgUsers.length > 0 && (
@@ -278,7 +272,7 @@ const OrgMembers = (props: Props) => {
                         type='checkbox'
                         checked={isAllSelected}
                         onChange={handleSelectAll}
-                        className='h-4 w-4 rounded border-slate-300 text-grape-700 focus:ring-grape-500'
+                        className='h-4 w-4 rounded border-hairline text-grape-700 focus:ring-grape-500'
                       />
                     )}
                   </div>
@@ -316,15 +310,14 @@ const OrgMembers = (props: Props) => {
           </table>
         </div>
       </div>
-      {bulkRemoveModal(
-        <RemoveFromOrgModal
-          orgId={organization.id}
-          userIds={selectedUserIds}
-          organizationUsers={selectedOrganizationUsers}
-          closePortal={closeBulkRemoveModal}
-          onSuccess={() => setSelectedUserIds([])}
-        />
-      )}
+      <RemoveFromOrgModal
+        isOpen={isBulkRemoveOpen}
+        orgId={organization.id}
+        userIds={selectedUserIds}
+        organizationUsers={selectedOrganizationUsers}
+        closePortal={() => setIsBulkRemoveOpen(false)}
+        onSuccess={() => setSelectedUserIds([])}
+      />
     </div>
   )
 }

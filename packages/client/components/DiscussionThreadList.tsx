@@ -1,24 +1,22 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
-import {type ReactNode, useEffect, useRef, useState} from 'react'
+import {type ComponentProps, type ReactNode, useEffect, useRef, useState} from 'react'
 import {useFragment} from 'react-relay'
 import type {DiscussionThreadList_discussion$key} from '~/__generated__/DiscussionThreadList_discussion.graphql'
 import type {DiscussionThreadList_threadables$key} from '~/__generated__/DiscussionThreadList_threadables.graphql'
 import type {DiscussionThreadList_viewer$key} from '~/__generated__/DiscussionThreadList_viewer.graphql'
-import type {RetroDiscussPhase_meeting$data} from '../__generated__/RetroDiscussPhase_meeting.graphql'
-import {PALETTE} from '../styles/paletteV3'
+import {cn} from '../ui/cn'
 import CommentingStatusText from './CommentingStatusText'
+import type {DiscussionThreadFilterValue} from './DiscussionThreadFilter'
+import DiscussionThreadTasks from './DiscussionThreadTasks'
 import LabelHeading from './LabelHeading/LabelHeading'
 import ThreadedItem from './ThreadedItem'
-import Transcription from './Transcription'
 
-export const Header = styled(LabelHeading)({
-  borderBottom: `1px solid ${PALETTE.SLATE_300}`,
-  margin: '0 0 8px',
-  padding: '12px',
-  textTransform: 'none',
-  width: '100%'
-})
+export const Header = ({className, ...rest}: ComponentProps<typeof LabelHeading>) => (
+  <LabelHeading
+    {...rest}
+    className={cn('m-0 mb-2 w-full border-hairline border-b p-3 normal-case', className)}
+  />
+)
 
 export type DiscussionThreadables = 'task' | 'comment' | 'poll'
 
@@ -30,8 +28,10 @@ interface Props {
   viewer: DiscussionThreadList_viewer$key
   header?: ReactNode
   emptyState?: ReactNode
-  transcription?: RetroDiscussPhase_meeting$data['transcription']
-  showTranscription?: boolean
+  filter: DiscussionThreadFilterValue
+  hiddenCommentCount: number
+  onAddTask: () => void
+  onShowAll: () => void
 }
 
 const DiscussionThreadList = (props: Props) => {
@@ -42,9 +42,11 @@ const DiscussionThreadList = (props: Props) => {
     commentorNames,
     viewer: viewerRef,
     header,
-    transcription,
     emptyState,
-    showTranscription
+    filter,
+    hiddenCommentCount,
+    onAddTask,
+    onShowAll
   } = props
   const viewer = useFragment(
     graphql`
@@ -71,13 +73,16 @@ const DiscussionThreadList = (props: Props) => {
         }
         threadParentId
         id
+        ...NullableTask_task @alias
+        replies {
+          id
+          ...NullableTask_task @alias
+        }
       }
     `,
     threadablesRef
   )
-  const isEmpty = showTranscription
-    ? !transcription || transcription.length === 0
-    : threadables.length === 0
+  const isEmpty = threadables.length === 0
 
   // Scroll to the new message at bottom if the viewer is already at the bottom
   const listRef = useRef<HTMLDivElement>(null)
@@ -94,6 +99,24 @@ const DiscussionThreadList = (props: Props) => {
     threadBottomRef.current?.scrollIntoView({behavior: 'smooth'})
   }, [threadables])
 
+  if (filter === 'tasks') {
+    const tasks = threadables
+      .flatMap((threadable) => [threadable, ...(threadable.replies ?? [])])
+      .flatMap(({id, NullableTask_task}) =>
+        NullableTask_task ? [{id, task: NullableTask_task}] : []
+      )
+    return (
+      <div className='flex flex-1 flex-col overflow-auto'>
+        {header}
+        <DiscussionThreadTasks
+          tasks={tasks}
+          hiddenCommentCount={hiddenCommentCount}
+          onAddTask={onAddTask}
+          onShowAll={onShowAll}
+        />
+      </div>
+    )
+  }
   if (isEmpty && emptyState) {
     return (
       <div className='flex flex-1 flex-col items-center justify-center overflow-auto'>
@@ -110,22 +133,18 @@ const DiscussionThreadList = (props: Props) => {
       {header}
       {/* https://stackoverflow.com/questions/36130760/use-justify-content-flex-end-and-to-have-vertical-scrollbar */}
       <div className='mx-0 mt-0 mb-auto' />
-      {showTranscription && transcription ? (
-        <Transcription transcription={transcription} />
-      ) : (
-        threadables.map((threadable) => {
-          const {id} = threadable
-          return (
-            <ThreadedItem
-              allowedThreadables={allowedThreadables}
-              viewer={viewer}
-              key={id}
-              threadable={threadable}
-              discussion={discussion}
-            />
-          )
-        })
-      )}
+      {threadables.map((threadable) => {
+        const {id} = threadable
+        return (
+          <ThreadedItem
+            allowedThreadables={allowedThreadables}
+            viewer={viewer}
+            key={id}
+            threadable={threadable}
+            discussion={discussion}
+          />
+        )
+      })}
       <div ref={threadBottomRef}></div>
       <CommentingStatusText commentorNames={commentorNames} />
     </div>

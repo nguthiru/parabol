@@ -2,16 +2,18 @@ import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
 import useAtmosphere from '~/hooks/useAtmosphere'
 import type {PromoteTeamMemberModal_teamMember$key} from '../../../../__generated__/PromoteTeamMemberModal_teamMember.graphql'
-import DialogContainer from '../../../../components/DialogContainer'
-import DialogContent from '../../../../components/DialogContent'
-import DialogTitle from '../../../../components/DialogTitle'
 import IconLabel from '../../../../components/IconLabel'
-import PrimaryButton from '../../../../components/PrimaryButton'
 import useMutationProps from '../../../../hooks/useMutationProps'
 import PromoteToTeamLeadMutation from '../../../../mutations/PromoteToTeamLeadMutation'
+import {Button} from '../../../../ui/Button/Button'
+import {Dialog} from '../../../../ui/Dialog/Dialog'
+import {DialogActions} from '../../../../ui/Dialog/DialogActions'
+import {DialogContent} from '../../../../ui/Dialog/DialogContent'
+import {DialogTitle} from '../../../../ui/Dialog/DialogTitle'
 import {upperFirst} from '../../../../utils/upperFirst'
 
 interface Props {
+  isOpen: boolean
   closePortal: () => void
   teamMember: PromoteTeamMemberModal_teamMember$key
 }
@@ -19,7 +21,7 @@ interface Props {
 const PromoteTeamMemberModal = (props: Props) => {
   const atmosphere = useAtmosphere()
   const {submitMutation, submitting, onError, onCompleted} = useMutationProps()
-  const {closePortal, teamMember: teamMemberRef} = props
+  const {isOpen, closePortal, teamMember: teamMemberRef} = props
   const teamMember = useFragment(
     graphql`
       fragment PromoteTeamMemberModal_teamMember on TeamMember {
@@ -61,24 +63,23 @@ const PromoteTeamMemberModal = (props: Props) => {
   const copy = `${copyStart} ${copyEnd}`
 
   return (
-    <DialogContainer>
-      <DialogTitle>{'Are you sure?'}</DialogTitle>
+    <Dialog isOpen={isOpen} onClose={closePortal}>
       <DialogContent>
-        {copy}
-        <PrimaryButton
-          size='medium'
-          className='mx-auto mt-6 mb-0'
-          onClick={handleClick}
-          waiting={submitting}
-        >
-          <IconLabel
-            icon='arrow_forward'
-            iconAfter
-            label={<div className='break-word whitespace-normal'>Yes, promote {preferredName}</div>}
-          />
-        </PrimaryButton>
+        <DialogTitle>Are you sure?</DialogTitle>
+        <p>{copy}</p>
+        <DialogActions>
+          <Button variant='primary' size='md' onClick={handleClick} disabled={submitting}>
+            <IconLabel
+              icon='arrow_forward'
+              iconAfter
+              label={
+                <div className='break-word whitespace-normal'>Yes, promote {preferredName}</div>
+              }
+            />
+          </Button>
+        </DialogActions>
       </DialogContent>
-    </DialogContainer>
+    </Dialog>
   )
 }
 

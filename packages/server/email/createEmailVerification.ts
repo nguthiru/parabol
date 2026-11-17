@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import crypto from 'crypto'
 import {Security, Threshold} from 'parabol-client/types/constEnums'
 import getKysely from '../postgres/getKysely'
+import normalizeEmail from '../utils/normalizeEmail'
 import emailVerificationEmailCreator from './emailVerificationEmailCreator'
 import getMailManager from './getMailManager'
 
@@ -16,7 +17,7 @@ type SignUpWithPasswordMutationVariables = {
 
 const createEmailVerification = async (props: SignUpWithPasswordMutationVariables) => {
   const {password, invitationToken, pseudoId, redirectTo} = props
-  const email = props.email.toLowerCase().trim()
+  const email = normalizeEmail(props.email)
   const tokenBuffer = crypto.randomBytes(48)
   const verifiedEmailToken = base64url.encode(tokenBuffer)
   const {subject, body, html} = emailVerificationEmailCreator({
@@ -24,16 +25,15 @@ const createEmailVerification = async (props: SignUpWithPasswordMutationVariable
     invitationToken,
     redirectTo
   })
-  const success = await getMailManager().sendEmail({
+  const mailManager = await getMailManager()
+  const success = await mailManager.sendEmail({
     to: email,
     subject,
     body,
     html,
     tags: ['type:emailVerification']
   })
-  if (!success) {
-    return {error: {message: 'Unable to send verification email'}}
-  }
+  if (!success) return false
   const hashedPassword = await bcrypt.hash(password, Security.SALT_ROUNDS)
   const pg = getKysely()
   await pg
@@ -47,7 +47,7 @@ const createEmailVerification = async (props: SignUpWithPasswordMutationVariable
       expiration: new Date(Date.now() + Threshold.EMAIL_VERIFICATION_LIFESPAN)
     })
     .execute()
-  return {error: {message: 'Verification required. Check your inbox.'}}
+  return true
 }
 
 export default createEmailVerification

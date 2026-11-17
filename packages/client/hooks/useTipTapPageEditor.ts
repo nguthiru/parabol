@@ -4,41 +4,78 @@ import Collaboration from '@tiptap/extension-collaboration'
 import {CollaborationCaret} from '@tiptap/extension-collaboration-caret'
 import {Details, DetailsContent, DetailsSummary} from '@tiptap/extension-details'
 import {Document} from '@tiptap/extension-document'
+import {FileHandler} from '@tiptap/extension-file-handler'
+import Highlight from '@tiptap/extension-highlight'
 import {TaskItem, TaskList} from '@tiptap/extension-list'
 import Mention from '@tiptap/extension-mention'
 import {TableRow} from '@tiptap/extension-table'
 import {Focus, Placeholder} from '@tiptap/extensions'
-import {useEditor} from '@tiptap/react'
+import {Markdown} from '@tiptap/markdown'
+import {type Editor, useEditor} from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import graphql from 'babel-plugin-relay/macro'
-import {useRef} from 'react'
+import {useEffect, useRef} from 'react'
+import {useLocation, useNavigate} from 'react-router'
 import {readInlineData} from 'relay-runtime'
 import AutoJoiner from 'tiptap-extension-auto-joiner'
-import {Markdown} from 'tiptap-markdown'
-import type {useTipTapPageEditor_viewer$key} from '../__generated__/useTipTapPageEditor_viewer.graphql'
-import {LoomExtension} from '../components/promptResponse/loomExtension'
-import {TiptapLinkExtension} from '../components/promptResponse/TiptapLinkExtension'
+import type {
+  TierEnum,
+  useTipTapPageEditor_viewer$key
+} from '../__generated__/useTipTapPageEditor_viewer.graphql'
+import {LoomExtension} from '../components/TipTapEditor/LoomExtension'
+import {TiptapLinkExtension} from '../components/TipTapEditor/TiptapLinkExtension'
+import {useArchivePageMutation} from '../mutations/useArchivePageMutation'
+import {
+  type DuplicateExecute,
+  useDuplicatePageMutation
+} from '../mutations/useDuplicatePageMutation'
+import {useUploadUserAsset} from '../mutations/useUploadUserAsset'
 import {themeBackgroundColors} from '../shared/themeBackgroundColors'
-import {mentionConfig} from '../shared/tiptap/serverTipTapExtensions'
+import {CalloutTitleBase} from '../shared/tiptap/extensions/CalloutTitleBase'
+import {SafeTextStyleKit} from '../shared/tiptap/extensions/SafeTextStyleKit'
+import {moveDroppedBlocks} from '../tiptap/blockMove/moveDroppedBlocks'
+import {BlockArrival} from '../tiptap/extensions/BlockArrival'
+import {BlockMoveHistory} from '../tiptap/extensions/BlockMoveHistory'
+import {BlockMoveKeys} from '../tiptap/extensions/BlockMoveKeys'
+import {BlockSelection} from '../tiptap/extensions/BlockSelection'
+import {Callout} from '../tiptap/extensions/callout/Callout'
+import {EmbedBlock} from '../tiptap/extensions/embedBlock/EmbedBlock'
+import {handleServerEmbedMessage} from '../tiptap/extensions/fileBlock/embedManager'
+import FileBlock from '../tiptap/extensions/fileBlock/FileBlock'
+import {FileUpload} from '../tiptap/extensions/fileUpload/FileUpload'
 import {IndentHandler} from '../tiptap/extensions/IndentHandler'
 import ImageBlock from '../tiptap/extensions/imageBlock/ImageBlock'
-import {ImageUpload} from '../tiptap/extensions/imageUpload/ImageUpload'
 import {InsightsBlock} from '../tiptap/extensions/insightsBlock/InsightsBlock'
 import {ResponseBlock} from '../tiptap/extensions/insightsBlock/ResponseBlock'
 import {TaskBlock} from '../tiptap/extensions/insightsBlock/TaskBlock'
 import {ThinkingBlock} from '../tiptap/extensions/insightsBlock/ThinkingBlock'
 import {PageDragHandle} from '../tiptap/extensions/PageDragHandle'
 import {PageLinkBlock} from '../tiptap/extensions/pageLinkBlock/PageLinkBlock'
+import {
+  SyncedBlockEdges,
+  type SyncedBlockEdgesOptions
+} from '../tiptap/extensions/pageLinkBlock/SyncedBlockEdges'
+import {showSyncedBlockRemovalSnack} from '../tiptap/extensions/pageLinkBlock/showSyncedBlockRemovalSnack'
+import {SyncedBlockDrops} from '../tiptap/extensions/pageLinkBlock/syncedBlockDrops'
+import type {SyncedBlockRemoval} from '../tiptap/extensions/pageLinkBlock/syncedBlockRemovalPlugin'
 import {PageLinkPicker} from '../tiptap/extensions/pageLinkPicker/PageLinkPicker'
+import {PageUserMention} from '../tiptap/extensions/pageUserMention/PageUserMention'
+import {pageUserSuggestion} from '../tiptap/extensions/pageUserMention/pageUserSuggestion'
+import {getPageSlashCommands} from '../tiptap/extensions/slashCommand/getPageSlashCommands'
 import {SlashCommand} from '../tiptap/extensions/slashCommand/SlashCommand'
 import {Table} from '../tiptap/extensions/table/Table'
 import {TableCell} from '../tiptap/extensions/table/TableCell'
 import {TableHeader} from '../tiptap/extensions/table/TableHeader'
-import {ElementWidth} from '../types/constEnums'
+import {TableOfContents} from '../tiptap/extensions/tableOfContents/TableOfContents'
+import {getPageFileType} from '../tiptap/getPageFileType'
+import {pagePlaceholderText, syncedBlockPlaceholderText} from '../tiptap/pagePlaceholderText'
+import {MAX_FILE_SIZE_FREE} from '../utils/constants'
 import {tiptapEmojiConfig} from '../utils/tiptapEmojiConfig'
-import {tiptapMentionConfig} from '../utils/tiptapMentionConfig'
+import {isArrivalPending} from './useArrivalHighlight'
 import useAtmosphere from './useAtmosphere'
+import useEventCallback from './useEventCallback'
 import {usePageLinkPlaceholder} from './usePageLinkPlaceholder'
+import {lookupPageViewerAccess} from './usePageViewerAccess'
 
 const colorIdx = Math.floor(Math.random() * themeBackgroundColors.length)
 export const useTipTapPageEditor = (
@@ -47,13 +84,18 @@ export const useTipTapPageEditor = (
     pageId: string
     viewerRef: useTipTapPageEditor_viewer$key | null
     teamId?: string
+    nested?: SyncedBlockEdgesOptions & {
+      preferredName?: string
+      highestTier?: TierEnum
+    }
   }
 ) => {
-  const {pageId, viewerRef, teamId} = options
+  const {pageId, viewerRef, nested} = options
   const user = readInlineData(
     graphql`
       fragment useTipTapPageEditor_viewer on User @inline {
         preferredName
+        highestTier
         organizations {
           hasDatabases: featureFlag(featureName: "Databases")
         }
@@ -61,9 +103,27 @@ export const useTipTapPageEditor = (
     `,
     viewerRef
   )
-  const preferredName = user?.preferredName
+  const [commit] = useUploadUserAsset()
+  const preferredName = nested ? nested.preferredName : user?.preferredName
   const hasDatabases = !!user?.organizations?.find((org) => org?.hasDatabases)
   const atmosphere = useAtmosphere()
+  const navigate = useNavigate()
+  const {hash} = useLocation()
+  const [executeArchive] = useArchivePageMutation()
+  const [executeDuplicate] = useDuplicatePageMutation()
+  const duplicatePage: DuplicateExecute = useEventCallback((config) => executeDuplicate(config))
+  const navigateToPath = useEventCallback((path: string) => navigate(path))
+  const onSyncedBlockRemoved = useEventCallback(
+    (removal: SyncedBlockRemoval, removedFrom: Editor) => {
+      showSyncedBlockRemovalSnack({
+        atmosphere,
+        editor: removedFrom,
+        navigate,
+        executeArchive,
+        removal
+      })
+    }
+  )
   const placeholderRef = useRef<string | undefined>(undefined)
   const editor = useEditor(
     {
@@ -76,10 +136,11 @@ export const useTipTapPageEditor = (
           document: false,
           undoRedo: false,
           link: false,
-          trailingNode: {
-            node: 'paragraph'
-          }
+          dropcursor: {color: 'var(--color-accent)', width: 3},
+          trailingNode: nested ? false : {node: 'paragraph'}
         }),
+        SafeTextStyleKit,
+        Highlight,
         Details.configure({
           persist: true,
           HTMLAttributes: {
@@ -88,6 +149,8 @@ export const useTipTapPageEditor = (
         }),
         DetailsSummary,
         DetailsContent,
+        Callout,
+        CalloutTitleBase,
         Table.configure({
           allowTableNodeSelection: true
         }),
@@ -99,59 +162,51 @@ export const useTipTapPageEditor = (
           nested: true
         }),
         SlashCommand.configure({
-          Database: hasDatabases
+          commands: getPageSlashCommands({hasDatabases, nested: !!nested})
         }),
+        ...(nested ? [SyncedBlockEdges.configure(nested)] : []),
         Focus,
-        ImageUpload.configure({
-          editorWidth: ElementWidth.REFLECTION_CARD - 16 * 2,
-          editorHeight: 88,
+        FileUpload.configure({
           scopeKey: pageId,
-          assetScope: 'Page'
+          assetScope: 'Page',
+          atmosphere,
+          commit,
+          highestTier: nested ? nested.highestTier : user?.highestTier
         }),
-        ImageBlock,
+        EmbedBlock,
+        ImageBlock.configure({
+          editorWidth: 720,
+          editorHeight: 400
+        }),
         IndentHandler,
         LoomExtension,
-        PageDragHandle.configure({pageId, atmosphere}),
+        PageDragHandle.configure({
+          pageId,
+          atmosphere,
+          isNested: !!nested,
+          duplicatePage,
+          navigate: navigateToPath
+        }),
+        SyncedBlockDrops.configure({pageId, isNested: !!nested, onBlockDrop: moveDroppedBlocks}),
+        BlockSelection,
+        BlockMoveKeys.configure({atmosphere, pageId}),
         Placeholder.configure({
           showOnlyWhenEditable: false,
           includeChildren: true,
           emptyNodeClass: 'is-empty print:hidden',
-          placeholder: ({node, pos}) => {
-            if (placeholderRef.current) {
-              return placeholderRef.current
-            }
-            const {type, attrs} = node
-            const {name} = type
-            switch (name) {
-              case 'heading':
-                if (pos === 0) return 'New Page'
-                return `Heading ${attrs.level}`
-              case 'codeBlock':
-                return 'New code'
-              case 'blockquote':
-                return 'New quote'
-              case 'paragraph':
-                return "Press '/' for commands"
-              case 'detailsSummary':
-                return 'New summary'
-              case 'detailsContent':
-                return 'Add details, use / to add blocks'
-              case 'bulletList':
-              case 'listItem':
-              case 'orderedList':
-              default:
-                return ''
-            }
-          }
+          placeholder: (props) =>
+            placeholderRef.current ||
+            (nested ? syncedBlockPlaceholderText(props) : pagePlaceholderText(props))
         }),
-        Mention.configure(
-          atmosphere && teamId ? tiptapMentionConfig(atmosphere, teamId) : mentionConfig
-        ),
+        PageUserMention.configure({
+          atmosphere,
+          suggestion: pageUserSuggestion
+        }),
         Mention.extend({name: 'emojiMention'}).configure(tiptapEmojiConfig),
         TiptapLinkExtension.configure({
           openOnClick: false
         }),
-        SearchAndReplace.configure(),
+        SearchAndReplace,
         Collaboration.configure({
           document: provider?.document
         }),
@@ -188,7 +243,9 @@ export const useTipTapPageEditor = (
               'hover:opacity-20',
               'print:hidden'
             )
-            cursor.setAttribute('style', `border-color: ${user.color}`)
+            // awareness comes from other clients, so only a hex color may reach the style attribute
+            const color = /^#[0-9a-f]{6}$/i.test(user.color) ? user.color : '#808080'
+            cursor.setAttribute('style', `border-color: ${color}`)
 
             const label = document.createElement('div')
             label.classList.add(
@@ -206,7 +263,7 @@ export const useTipTapPageEditor = (
               'text-white',
               'text-xs'
             )
-            label.setAttribute('style', `background-color: ${user.color}`)
+            label.setAttribute('style', `background-color: ${color}`)
             label.insertBefore(document.createTextNode(user.name), null)
             cursor.insertBefore(label, null)
 
@@ -218,28 +275,109 @@ export const useTipTapPageEditor = (
             color: `#${themeBackgroundColors[colorIdx]}`
           }
         }),
+        BlockMoveHistory.configure({atmosphere}),
+        BlockArrival,
         InsightsBlock,
-        AutoJoiner,
-        Markdown.configure({
-          html: true,
-          transformPastedText: true,
-          transformCopiedText: true
-        }),
+        AutoJoiner.configure({elementsToJoin: ['taskList']}),
+        Markdown,
         PageLinkPicker.configure({
           atmosphere
         }),
-        PageLinkBlock.configure({yDoc: provider.document}),
+        PageLinkBlock.configure({
+          yDoc: provider.document,
+          getViewerAccess: (pageCode) => lookupPageViewerAccess(atmosphere, pageCode),
+          preferredName,
+          highestTier: nested ? nested.highestTier : user?.highestTier,
+          pageId,
+          pastedLinksAreCopies: !!nested,
+          onSyncedBlockRemoved
+        }),
+        TableOfContents,
         TaskBlock,
         ThinkingBlock,
-        ResponseBlock
+        ResponseBlock,
+        FileBlock,
+        FileHandler.configure({
+          onDrop: (currentEditor, files, pos) => {
+            ;(async () => {
+              for (let i = 0; i < files.length; i++) {
+                const file = files[i]!
+                const targetType = getPageFileType(file, !!nested)
+                if (targetType === 'csv' || targetType === 'xlsx') {
+                  if (file.size > MAX_FILE_SIZE_FREE) {
+                    atmosphere.eventEmitter.emit('addSnackbar', {
+                      key: 'fileTooBIG',
+                      message: `The file is too large to import, embedding it.`,
+                      autoDismiss: 5
+                    })
+                    await currentEditor.storage.fileUpload.onUpload(
+                      file,
+                      currentEditor,
+                      'file',
+                      pos
+                    )
+                    continue
+                  }
+                  currentEditor.emit('importDatabase', {file, targetType, pos})
+                  continue
+                }
+                await currentEditor.storage.fileUpload.onUpload(
+                  file,
+                  currentEditor,
+                  targetType,
+                  pos
+                )
+              }
+            })()
+          },
+          onPaste: (currentEditor, files, htmlContent) => {
+            if (htmlContent) {
+              // Process image files that were provided alongside HTML content.
+              // These typically correspond to data: URI images that parseHTML excludes.
+              ;(async () => {
+                for (const file of files) {
+                  if (getPageFileType(file, !!nested) !== 'image') continue
+                  await currentEditor.storage.fileUpload.onUpload(file, currentEditor, 'image')
+                }
+              })()
+              return
+            }
+            ;(async () => {
+              for (let i = 0; i < files.length; i++) {
+                const file = files[i]!
+                const targetType = getPageFileType(file, !!nested)
+                if (targetType === 'csv' || targetType === 'xlsx') {
+                  if (file.size > MAX_FILE_SIZE_FREE) {
+                    atmosphere.eventEmitter.emit('addSnackbar', {
+                      key: 'fileTooBIG',
+                      message: `The file is too large to import, embedding it.`,
+                      autoDismiss: 5
+                    })
+                    currentEditor.storage.fileUpload.onUpload(file, currentEditor, 'file')
+                    return
+                  }
+                  currentEditor.emit('importDatabase', {file, targetType, pos: undefined})
+                  continue
+                }
+                await currentEditor.storage.fileUpload.onUpload(file, currentEditor, targetType)
+              }
+            })()
+          }
+        })
       ],
-      autofocus: true,
+      autofocus: !nested && !isArrivalPending(pageId, hash),
       editable: true
     },
     [provider]
   )
 
   usePageLinkPlaceholder(editor!, placeholderRef)
+  useEffect(() => {
+    provider.on('stateless', handleServerEmbedMessage)
+    return () => {
+      provider.off('stateless', handleServerEmbedMessage)
+    }
+  }, [provider])
 
   return {editor}
 }

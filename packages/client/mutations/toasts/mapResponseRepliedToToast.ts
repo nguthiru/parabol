@@ -1,8 +1,9 @@
 import graphql from 'babel-plugin-relay/macro'
 import type {mapResponseRepliedToToast_notification$data} from '../../__generated__/mapResponseRepliedToToast_notification.graphql'
 import type {Snack} from '../../components/Snackbar'
-import type {OnNextHistoryContext} from '../../types/relayMutations'
+import type {OnNextNavigateContext} from '../../types/relayMutations'
 import makeNotificationToastKey from './makeNotificationToastKey'
+import type {UnmaskedNotification} from './mapNotificationToToast'
 
 graphql`
   fragment mapResponseRepliedToToast_notification on NotifyResponseReplied {
@@ -22,10 +23,9 @@ graphql`
 `
 
 const mapResponseRepliedToToast = (
-  notification: mapResponseRepliedToToast_notification$data,
-  {history}: OnNextHistoryContext
+  notification: UnmaskedNotification<mapResponseRepliedToToast_notification$data>,
+  {navigate}: OnNextNavigateContext
 ): Snack | null => {
-  if (!notification) return null
   const {id: notificationId, meeting, author, response} = notification
   const authorName = author ? author.preferredName : 'Anonymous'
   const {id: meetingId, name: meetingName} = meeting
@@ -40,7 +40,7 @@ const mapResponseRepliedToToast = (
     action: {
       label: 'See the discussion',
       callback: () => {
-        history.push(`/meet/${meetingId}/responses?responseId=${encodeURIComponent(response.id)}`)
+        navigate(`/meet/${meetingId}/responses?responseId=${encodeURIComponent(response.id)}`)
       }
     }
   }

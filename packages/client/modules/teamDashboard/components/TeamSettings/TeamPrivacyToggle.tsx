@@ -1,16 +1,16 @@
 import graphql from 'babel-plugin-relay/macro'
 import {useState} from 'react'
 import {useFragment} from 'react-relay'
+import {useNavigate} from 'react-router'
 import type {TeamPrivacyToggle_team$key} from '../../../../__generated__/TeamPrivacyToggle_team.graphql'
 import Toggle from '../../../../components/Toggle/Toggle'
 import useAtmosphere from '../../../../hooks/useAtmosphere'
 import useMutationProps from '../../../../hooks/useMutationProps'
-import useRouter from '../../../../hooks/useRouter'
+
 import ToggleTeamPrivacyMutation from '../../../../mutations/ToggleTeamPrivacyMutation'
 import {Tooltip} from '../../../../ui/Tooltip/Tooltip'
 import {TooltipContent} from '../../../../ui/Tooltip/TooltipContent'
 import {TooltipTrigger} from '../../../../ui/Tooltip/TooltipTrigger'
-import SendClientSideEvent from '../../../../utils/SendClientSideEvent'
 import TeamPrivacyConfirmModal from './TeamPrivacyConfirmModal'
 
 interface Props {
@@ -32,7 +32,7 @@ const TeamPrivacyToggle = (props: Props) => {
     teamRef
   )
 
-  const {history} = useRouter()
+  const navigate = useNavigate()
   const {id: teamId, isPublic, name: teamName, tier, orgId} = team
   const atmosphere = useAtmosphere()
   const {onCompleted, onError, submitting, submitMutation} = useMutationProps()
@@ -65,18 +65,14 @@ const TeamPrivacyToggle = (props: Props) => {
   }
 
   const handleUpgradeClick = () => {
-    history.push(`/me/organizations/${orgId}`)
-    SendClientSideEvent(atmosphere, 'Upgrade CTA Clicked', {
-      upgradeCTALocation: 'publicTeams',
-      orgId
-    })
+    navigate(`/me/organizations/${orgId}`)
   }
 
   return (
     <>
       <div className='flex w-full items-start justify-between'>
-        <div className='text-slate-700 text-sm'>
-          <div className='text-slate-700 text-sm'>
+        <div className='text-fg-primary text-sm'>
+          <div className='text-fg-primary text-sm'>
             {isPublic ? (
               <>
                 <div>
@@ -84,8 +80,8 @@ const TeamPrivacyToggle = (props: Props) => {
                   team.
                 </div>
                 {isStarterTier && (
-                  <div className='mt-1 font-medium text-slate-600 text-xs'>
-                    <a className='cursor-pointer text-sky-500' onClick={handleUpgradeClick}>
+                  <div className='mt-1 font-medium text-fg-secondary text-xs'>
+                    <a className='cursor-pointer text-accent' onClick={handleUpgradeClick}>
                       Upgrade
                     </a>{' '}
                     to make it private.

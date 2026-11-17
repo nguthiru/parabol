@@ -1,91 +1,63 @@
 """
-The Azure DevOps auth + integration helpers for a specific team member
+A team member's Azure DevOps connection: their OAuth2 grant and the work items and projects it
+shares with the team. One exists per (team, user) pair
 """
 type AzureDevOpsIntegration {
   """
-  The OAuth2 Authorization for this team member
+  The OAuth2 grant for this team member's Azure DevOps connection. Null when they have not
+  connected, or the grant was revoked
   """
   auth: TeamMemberIntegrationAuthOAuth2
 
   """
-  Composite key in ado:teamId:userId format
+  Composite key in the format "ado:{teamId}:{userId}"
   """
   id: ID!
 
   """
-  The Azure DevOps account ID
-  """
-  accountId: ID!
-
-  """
-  The Azure DevOps instance IDs that the user has granted
-  """
-  instanceIds: [ID!]!
-
-  """
-  The timestamp the provider was created
-  """
-  createdAt: DateTime!
-
-  """
-  The team that the token is linked to
+  The Parabol team this connection belongs to
   """
   teamId: ID!
 
   """
-  The timestamp the token was updated at
-  """
-  updatedAt: DateTime!
-
-  """
-  The user that the access token is attached to
+  The Parabol user who owns this connection
   """
   userId: ID!
 
   """
-  A list of work items coming straight from the azure dev ops integration for a specific team member
+  Work items fetched live from the projects this connection shares with the team, most recently
+  changed first. A plain search matches titles, or a work item id when it is a number
   """
   workItems(
+    """
+    Maximum number of work items to return
+    """
     first: Int = 100
 
     """
-    the datetime cursor
-    """
-    after: DateTime
-
-    """
-    A string of text to search for, or WIQL if isWIQL is true
+    A plain-text search string, or a WIQL WHERE clause if isWIQL is true. Null or empty returns
+    the most recently changed open work items
     """
     queryString: String
 
     """
-    A list of projects to restrict the search to, if null will search all
+    Names or integrationRepoIds of shared projects to restrict the search to. Empty searches all of them
     """
     projectKeyFilters: [String!]!
 
     """
-    true if the queryString is WIQL, else false
+    True when queryString is a WIQL (Work Item Query Language) WHERE clause
     """
     isWIQL: Boolean!
   ): AzureDevOpsWorkItemConnection!
 
   """
-  A list of projects coming straight from the azure dev ops integration for a specific team member
-  """
-  projects: [AzureDevOpsRemoteProject!]!
-
-  """
-  The cloud provider the team member may choose to integrate with. Nullable based on env vars
+  The global OAuth2 provider for Azure DevOps. Null when this instance has no credentials for it
   """
   cloudProvider: IntegrationProviderOAuth2
 
   """
-  The non-global providers shared with the team or organization
+  The team- and org-scoped OAuth2 providers for Azure DevOps on this team
   """
   sharedProviders: [IntegrationProviderOAuth2!]!
-
-  """
-  the list of suggested search queries, sorted by most recent. Guaranteed to be < 60 days old
-  """
-  azureDevOpsSearchQueries: [AzureDevOpsSearchQuery!]!
 }

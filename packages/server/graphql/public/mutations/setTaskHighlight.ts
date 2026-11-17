@@ -1,0 +1,54 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {isTeamMember} from '../../../utils/authorization'
+import getRedis from '../../../utils/getRedis'
+import publish from '../../../utils/publish'
+import type {MutationResolvers} from '../resolverTypes'
+
+const HIGHLIGHT_TIMEOUT_SECONDS = 300
+
+const setTaskHighlight: MutationResolvers['setTaskHighlight'] = async (
+  _source,
+  {taskId, meetingId, isHighlighted},
+  {authToken, dataLoader, socketId: mutatorId}
+) => {
+  const operationId = dataLoader.share()
+  const subOptions = {operationId, mutatorId}
+
+  // AUTH
+  const [meeting] = await Promise.all([dataLoader.get('newMeetings').load(meetingId)])
+
+  if (!meeting) throw new GraphQLError('Meeting not found', {extensions: {code: 'NOT_FOUND'}})
+  const {teamId} = meeting
+  if (!isTeamMember(authToken, teamId))
+    throw new GraphQLError('Not on team', {extensions: {code: 'FORBIDDEN'}})
+
+  const redis = getRedis()
+  if (isHighlighted) {
+    redis.set(`meetingTaskHighlight:${meetingId}`, taskId, 'EX', HIGHLIGHT_TIMEOUT_SECONDS)
+    dataLoader.get('meetingHighlightedTaskId').prime(meetingId, taskId)
+  } else {
+    const highlightChanged = await redis.eval(
+      `local highlightedTask=redis.call('get',KEYS[1]);
+      if highlightedTask == ARGV[1] then
+        redis.call('del',KEYS[1])
+        return 1
+      else
+        return 0
+      end`,
+      1,
+      `meetingTaskHighlight:${meetingId}`,
+      taskId
+    )
+    if (highlightChanged) {
+      dataLoader.get('meetingHighlightedTaskId').prime(meetingId, null)
+    }
+  }
+
+  // RESOLUTION
+  const data = {meetingId, taskId}
+  publish(SubscriptionChannel.MEETING, meetingId, 'SetTaskHighlightSuccess', data, subOptions)
+  return data
+}
+
+export default setTaskHighlight

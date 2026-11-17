@@ -1,4 +1,5 @@
 import graphql from 'babel-plugin-relay/macro'
+import {commitLocalUpdate} from 'relay-runtime'
 import type {InvalidateSessionsMutation_notification$data} from '~/__generated__/InvalidateSessionsMutation_notification.graphql'
 import type {NotificationSubscription_meetingStageTimeLimitEnd$data} from '~/__generated__/NotificationSubscription_meetingStageTimeLimitEnd.graphql'
 import type {NotificationSubscription_paymentRejected$data} from '~/__generated__/NotificationSubscription_paymentRejected.graphql'
@@ -18,10 +19,6 @@ import {
 } from '../mutations/CreateTaskMutation'
 import handleAddNotifications from '../mutations/handlers/handleAddNotifications'
 import {
-  inviteToTeamNotificationOnNext,
-  inviteToTeamNotificationUpdater
-} from '../mutations/InviteToTeamMutation'
-import {
   removeOrgUsersNotificationOnNext,
   removeOrgUsersNotificationUpdater
 } from '../mutations/RemoveOrgUsersMutation'
@@ -31,10 +28,10 @@ import {
 } from '../mutations/RemoveTeamMemberMutation'
 import {popNotificationToastOnNext} from '../mutations/toasts/popNotificationToast'
 import {updateNotificationToastOnNext} from '../mutations/toasts/updateNotificationToast'
-import {handleArchivePage} from '../mutations/useArchivePageMutation'
 import {handleCreatePage} from '../mutations/useCreatePageMutation'
 import {handleUpdatePage} from '../mutations/useUpdatePageMutation'
-import type {OnNextHandler, OnNextHistoryContext, SharedUpdater} from '../types/relayMutations'
+import type {OnNextHandler, OnNextNavigateContext, SharedUpdater} from '../types/relayMutations'
+import archivePageNotificationUpdater from './archivePageNotificationUpdater'
 import {createSubscription} from './createSubscription'
 
 graphql`
@@ -91,16 +88,16 @@ const subscription = graphql`
       }
 
       RemoveIntegrationSearchQuerySuccess {
-        ...RemoveJiraServerSearchQueryMutation_notification @relay(mask: false)
-      }
-      PersistGitHubSearchQuerySuccess {
-        ...PersistGitHubSearchQueryMutation_notification @relay(mask: false)
+        ...useRemoveIntegrationSearchQueryMutation_notification @relay(mask: false)
       }
       AddOrgPayload {
         ...AddOrgMutation_notification @relay(mask: false)
       }
       AddTeamPayload {
         ...AddTeamMutation_notification @relay(mask: false)
+      }
+      AddTeamMemberIntegrationAuthSuccess {
+        ...AddTeamMemberIntegrationAuthMutation_notification @relay(mask: false)
       }
       ArchiveTimelineEventSuccess {
         ...ArchiveTimelineEventMutation_notification @relay(mask: false)
@@ -117,9 +114,6 @@ const subscription = graphql`
       EndRetrospectiveSuccess {
         ...EndRetrospectiveMutation_notification @relay(mask: false)
       }
-      InviteToTeamPayload {
-        ...InviteToTeamMutation_notification @relay(mask: false)
-      }
       RemoveOrgUsersSuccess {
         ...RemoveOrgUsersMutation_notification @relay(mask: false)
       }
@@ -129,11 +123,8 @@ const subscription = graphql`
       InvalidateSessionsPayload {
         ...InvalidateSessionsMutation_notification @relay(mask: false)
       }
-      PersistJiraSearchQuerySuccess {
-        ...PersistJiraSearchQueryMutation_notification @relay(mask: false)
-      }
       PersistIntegrationSearchQuerySuccess {
-        ...PersistJiraServerSearchQueryMutation_notification @relay(mask: false)
+        ...usePersistIntegrationSearchQueryMutation_notification @relay(mask: false)
       }
 
       AuthTokenPayload {
@@ -179,10 +170,21 @@ const subscription = graphql`
         descriptionHTML
       }
 
+      IntegrationService {
+        ...TaskFooterIntegrateMenuServiceRepos_service @relay(mask: false)
+        ...azureDevOpsSharedProjects_service
+      }
+
       ToggleFeatureFlagSuccess {
         featureFlag {
           featureName
           enabled
+        }
+      }
+      UpdateUserThemeSuccess {
+        user {
+          id
+          theme
         }
       }
       CreatePagePayload {
@@ -194,19 +196,22 @@ const subscription = graphql`
       UpdatePageAccessPayload {
         ...useUpdatePageAccessMutation_notification @relay(mask: false)
       }
+      ExportPagesToConfluenceSuccess {
+        ...useExportPagesToConfluenceMutation_notification @relay(mask: false)
+      }
     }
   }
 `
 
 type NextHandler = OnNextHandler<
   TNotificationSubscription['response']['notificationSubscription']['AuthTokenPayload'],
-  OnNextHistoryContext
+  OnNextNavigateContext
 >
 
 const stripeFailPaymentNotificationOnNext: OnNextHandler<
   NotificationSubscription_paymentRejected$data,
-  OnNextHistoryContext
-> = (payload, {atmosphere, history}) => {
+  OnNextNavigateContext
+> = (payload, {atmosphere, navigate}) => {
   if (!payload) return
   const {paymentRejectedNotification} = payload
   const {organization} = paymentRejectedNotification
@@ -219,7 +224,7 @@ const stripeFailPaymentNotificationOnNext: OnNextHandler<
     action: {
       label: 'Fix it!',
       callback: () => {
-        history!.push(`/me/organizations/${orgId}`)
+        navigate(`/me/organizations/${orgId}`)
       }
     }
   })
@@ -228,8 +233,8 @@ const stripeFailPaymentNotificationOnNext: OnNextHandler<
 // there's a bug in relay compiler that only shows part of the discriminated union
 const meetingStageTimeLimitOnNext: OnNextHandler<
   NotificationSubscription_meetingStageTimeLimitEnd$data,
-  OnNextHistoryContext
-> = (payload: any, {atmosphere, history}) => {
+  OnNextNavigateContext
+> = (payload: any, {atmosphere, navigate}) => {
   if (!payload || payload.__typename !== 'MeetingStageTimeLimitPayload') return
   const {timeLimitNotification} = payload
   const {meeting} = timeLimitNotification
@@ -242,7 +247,7 @@ const meetingStageTimeLimitOnNext: OnNextHandler<
     action: {
       label: 'Go there',
       callback: () => {
-        history!.push(`/meet/${meetingId}`)
+        navigate(`/meet/${meetingId}`)
       }
     }
   })
@@ -265,12 +270,20 @@ const addNewFeatureNotificationUpdater: SharedUpdater<any> = (payload, {store}) 
 }
 
 const authTokenNotificationOnNext: NextHandler = (_payload, {atmosphere}) => {
-  atmosphere.refreshSession()
+  // Invalidate viewer only after refreshSession completes so the server has already
+  // updated extra.authToken to the new token. Invalidating immediately would trigger
+  // a Relay refetch while the old token's jti is being blacklisted mid-mutation,
+  // causing useCheckBlacklist to null out authToken on the concurrent query.
+  atmosphere.refreshSession(() => {
+    commitLocalUpdate(atmosphere, (store) => {
+      store.getRoot().getLinkedRecord('viewer')?.invalidateRecord()
+    })
+  })
 }
 
 const invalidateSessionsNotificationOnNext: OnNextHandler<
   InvalidateSessionsMutation_notification$data,
-  OnNextHistoryContext
+  OnNextNavigateContext
 > = (_payload, {atmosphere}) => {
   atmosphere.invalidateSession('You’ve been logged out from another device')
 }
@@ -279,15 +292,6 @@ const addedNotificationUpdater: SharedUpdater<any> = (payload, context) => {
   const notification = payload.getLinkedRecord('addedNotification')
   if (!notification) return
   handleAddNotifications(notification, context.store)
-}
-
-const archivePageNotificationUpdater: SharedUpdater<any> = (payload, context) => {
-  const archivedPageId = payload.getValue('pageId')
-  const archivedPage = payload.getLinkedRecord('page')
-  handleArchivePage(archivedPageId, {
-    ...context,
-    isHardDelete: !archivedPage
-  })
 }
 
 const createPageNotificationUpdater: SharedUpdater<any> = (payload, context) => {
@@ -305,6 +309,11 @@ const updatePageAccessNotificationUpdater: SharedUpdater<
   NotificationSubscription$data['notificationSubscription']['UpdatePageAccessPayload']
 > = (payload, context) => {
   handleUpdatePage(payload, context)
+  const page = payload.getLinkedRecord('page')
+  if (!page) return
+  const pageId = page.getValue('id') as string
+  const publicRecord = context.store.getRoot().getLinkedRecord('public')
+  publicRecord?.setLinkedRecord(page, 'page', {pageId})
 }
 
 const updateHandlers = {
@@ -320,7 +329,6 @@ const updateHandlers = {
   UpdatePageAccessPayload: updatePageAccessNotificationUpdater,
   EndCheckInSuccess: endCheckInNotificationUpdater,
   EndRetrospectiveSuccess: endRetrospectiveNotificationUpdater,
-  InviteToTeamPayload: inviteToTeamNotificationUpdater,
   MeetingStageTimeLimitPayload: meetingStageTimeLimitUpdater,
   RemoveOrgUsersSuccess: removeOrgUsersNotificationUpdater,
   RemoveTeamMemberPayload: removeTeamMemberNotificationUpdater,
@@ -331,7 +339,6 @@ const updateHandlers = {
 const onNextHandlers = {
   AuthTokenPayload: authTokenNotificationOnNext,
   CreateTaskPayload: createTaskNotificationOnNext,
-  InviteToTeamPayload: inviteToTeamNotificationOnNext,
   RemoveOrgUsersSuccess: removeOrgUsersNotificationOnNext,
   RemoveTeamMemberPayload: removeTeamMemberNotificationOnNext,
   StripeFailPaymentPayload: stripeFailPaymentNotificationOnNext,

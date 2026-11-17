@@ -1,36 +1,23 @@
-import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {GraphQLError} from 'graphql'
 import generateUID from '../../../generateUID'
 import getKysely from '../../../postgres/getKysely'
-import {getUserId, isTeamMember} from '../../../utils/authorization'
-import publish from '../../../utils/publish'
-import standardError from '../../../utils/standardError'
+import {getUserId} from '../../../utils/authorization'
 import type {MutationResolvers} from '../resolverTypes'
 
 const setSlackNotification: MutationResolvers['setSlackNotification'] = async (
   _source,
   {slackChannelId, slackNotificationEvents, teamId},
-  {authToken, dataLoader, socketId: mutatorId}
+  {authToken, dataLoader}
 ) => {
   const viewerId = getUserId(authToken)
-  const operationId = dataLoader.share()
-  const subOptions = {mutatorId, operationId}
   const pg = getKysely()
-
-  // AUTH
-  if (!isTeamMember(authToken, teamId)) {
-    return standardError(new Error('Attempted teamId spoof'), {
-      userId: viewerId
-    })
-  }
 
   // VALIDATION
   const slackAuths = await dataLoader.get('slackAuthByUserId').load(viewerId)
   const slackAuth = slackAuths.find((auth) => auth.teamId === teamId)
 
   if (!slackAuth) {
-    return standardError(new Error('Slack authentication not found'), {
-      userId: viewerId
-    })
+    throw new GraphQLError('Slack authentication not found', {extensions: {code: 'NOT_FOUND'}})
   }
 
   // RESOLUTION
@@ -52,9 +39,7 @@ const setSlackNotification: MutationResolvers['setSlackNotification'] = async (
     .returning('id')
     .execute()
   const slackNotificationIds = results.map(({id}) => id)
-  const data = {userId: viewerId, slackNotificationIds}
-  publish(SubscriptionChannel.TEAM, teamId, 'SetSlackNotificationPayload', data, subOptions)
-  return data
+  return {userId: viewerId, slackNotificationIds}
 }
 
 export default setSlackNotification

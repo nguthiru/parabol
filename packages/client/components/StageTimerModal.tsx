@@ -1,17 +1,14 @@
-import styled from '@emotion/styled'
-import {Event as EventIcon, Timer as TimerIcon} from '@mui/icons-material'
 import graphql from 'babel-plugin-relay/macro'
 import {useState} from 'react'
 import {useFragment} from 'react-relay'
-import SwipeableViews from 'react-swipeable-views'
-import type {StageTimerModal_facilitator$key} from '../__generated__/StageTimerModal_facilitator.graphql'
+import {Event as EventIcon, Timer as TimerIcon} from '~/ui/icons'
 import type {StageTimerModal_stage$key} from '../__generated__/StageTimerModal_stage.graphql'
-import type {MenuProps} from '../hooks/useMenu'
-import {PALETTE} from '../styles/paletteV3'
+import type {StageTimerModal_teamMember$key} from '../__generated__/StageTimerModal_teamMember.graphql'
 import StageTimerModalEditTimeEnd from './StageTimerModalEditTimeEnd'
 import StageTimerModalEditTimeLimit from './StageTimerModalEditTimeLimit'
 import StageTimerModalEndTime from './StageTimerModalEndTime'
 import StageTimerModalTimeLimit from './StageTimerModalTimeLimit'
+import SwipeablePanel from './SwipeablePanel'
 import Tab from './Tab/Tab'
 import Tabs from './Tabs/Tabs'
 
@@ -22,51 +19,27 @@ interface Props {
   defaultToAsync: boolean
   meetingId: string
   stage: StageTimerModal_stage$key
-  menuProps: MenuProps
-  facilitator: StageTimerModal_facilitator$key
+  closePortal: () => void
+  teamMember: StageTimerModal_teamMember$key
 }
-
-const FullTab = styled(Tab)({
-  justifyContent: 'center',
-  padding: '4px 0 8px',
-  width: WIDTH / 2
-})
-
-const Modal = styled('div')({
-  alignItems: 'center',
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden',
-  width: WIDTH
-})
-
-const TabContents = styled('div')({
-  alignItems: 'center',
-  display: 'flex',
-  flexDirection: 'column'
-})
-
-const StyledTabsBar = styled(Tabs)({
-  boxShadow: `inset 0 -1px 0 ${PALETTE.SLATE_300}`
-})
 
 const StageTimerModal = (props: Props) => {
   const {
     defaultTimeLimit,
     defaultToAsync,
     meetingId,
-    menuProps,
+    closePortal,
     stage: stageRef,
-    facilitator: facilitatorRef
+    teamMember: teamMemberRef
   } = props
-  const facilitator = useFragment(
+  const teamMember = useFragment(
     graphql`
-      fragment StageTimerModal_facilitator on TeamMember {
-        ...StageTimerModalEndTime_facilitator
-        ...StageTimerModalEditTimeEnd_facilitator
+      fragment StageTimerModal_teamMember on TeamMember {
+        ...StageTimerModalEndTime_teamMember
+        ...StageTimerModalEditTimeEnd_teamMember
       }
     `,
-    facilitatorRef
+    teamMemberRef
   )
   const stage = useFragment(
     graphql`
@@ -83,7 +56,6 @@ const StageTimerModal = (props: Props) => {
   )
   const {isAsync} = stage
   const [activeIdx, setActiveIdx] = useState(defaultToAsync ? 1 : 0)
-  const {closePortal} = menuProps
   if (isAsync === false) {
     return (
       <StageTimerModalEditTimeLimit meetingId={meetingId} closePortal={closePortal} stage={stage} />
@@ -94,40 +66,43 @@ const StageTimerModal = (props: Props) => {
         meetingId={meetingId}
         closePortal={closePortal}
         stage={stage}
-        facilitator={facilitator}
+        teamMember={teamMember}
       />
     )
   }
   return (
-    <Modal>
-      <StyledTabsBar activeIdx={activeIdx}>
-        <FullTab label={<TimerIcon />} onClick={() => setActiveIdx(0)} />
-        <FullTab label={<EventIcon />} onClick={() => setActiveIdx(1)} />
-      </StyledTabsBar>
-      <SwipeableViews
-        enableMouseEvents
-        index={activeIdx}
-        onChangeIndex={(idx) => setActiveIdx(idx)}
-        animateHeight
-      >
-        <TabContents>
+    <div className='flex flex-col items-center overflow-hidden' style={{width: WIDTH}}>
+      <Tabs activeIdx={activeIdx} className='shadow-[inset_0_-1px_0_theme(colors.slate.300)]'>
+        <Tab
+          className='w-[112px] justify-center pt-1 pb-2'
+          label={<TimerIcon />}
+          onClick={() => setActiveIdx(0)}
+        />
+        <Tab
+          className='w-[112px] justify-center pt-1 pb-2'
+          label={<EventIcon />}
+          onClick={() => setActiveIdx(1)}
+        />
+      </Tabs>
+      <SwipeablePanel index={activeIdx} onChangeIndex={(idx) => setActiveIdx(idx)} animateHeight>
+        <div className='flex flex-col items-center'>
           <StageTimerModalTimeLimit
             defaultTimeLimit={defaultTimeLimit}
             meetingId={meetingId}
             closePortal={closePortal}
             stage={stage}
           />
-        </TabContents>
-        <TabContents>
+        </div>
+        <div className='flex flex-col items-center'>
           <StageTimerModalEndTime
-            facilitator={facilitator}
+            teamMember={teamMember}
             meetingId={meetingId}
             closePortal={closePortal}
             stage={stage}
           />
-        </TabContents>
-      </SwipeableViews>
-    </Modal>
+        </div>
+      </SwipeablePanel>
+    </div>
   )
 }
 

@@ -3,7 +3,7 @@ import {useMemo} from 'react'
 import {type PreloadedQuery, usePreloadedQuery} from 'react-relay'
 import type {PageRoleEnum} from '../../__generated__/NotificationSubscription.graphql'
 import query, {type SubPagesQuery} from '../../__generated__/SubPagesQuery.graphql'
-import type {PageLinkBlockAttributes} from '../../shared/tiptap/extensions/PageLinkBlockBase'
+import type {PageLinkBlockAttrs} from '../../shared/tiptap/extensions/PageLinkBlockBase'
 import {LeftNavPageLink, type PageParentSection} from './LeftNavPageLink'
 
 graphql`
@@ -28,7 +28,7 @@ graphql`
 interface Props {
   queryRef: PreloadedQuery<SubPagesQuery>
   pageAncestors: string[]
-  pageLinks: PageLinkBlockAttributes[] | null | undefined
+  pageLinks: PageLinkBlockAttrs[] | null | undefined
   parentPageViewerAccess?: PageRoleEnum
 }
 
@@ -65,7 +65,7 @@ export const SubPages = (props: Props) => {
   if (!children || children.length === 0) {
     const noLinksMessage = !children ? 'Loading' : 'No pages inside'
     return (
-      <div style={{paddingLeft: depth * 8 + 8}} className='font-medium text-slate-500 text-sm'>
+      <div style={{paddingLeft: depth * 8 + 8}} className='font-medium text-fg-nav-muted text-sm'>
         {noLinksMessage}
       </div>
     )

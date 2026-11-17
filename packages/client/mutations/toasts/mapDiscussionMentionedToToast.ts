@@ -1,11 +1,12 @@
 import graphql from 'babel-plugin-relay/macro'
 import type {mapDiscussionMentionedToToast_notification$data} from '../../__generated__/mapDiscussionMentionedToToast_notification.graphql'
 import type {Snack} from '../../components/Snackbar'
-import type {OnNextHistoryContext} from '../../types/relayMutations'
+import type {OnNextNavigateContext} from '../../types/relayMutations'
 import findStageById from '../../utils/meetings/findStageById'
 import fromStageIdToUrl from '../../utils/meetings/fromStageIdToUrl'
 import getMeetingPathParams from '../../utils/meetings/getMeetingPathParams'
 import makeNotificationToastKey from './makeNotificationToastKey'
+import type {UnmaskedNotification} from './mapNotificationToToast'
 
 graphql`
   fragment mapDiscussionMentionedToToast_notification on NotifyDiscussionMentioned {
@@ -41,10 +42,9 @@ graphql`
 `
 
 const mapDiscussionMentionedToToast = (
-  notification: mapDiscussionMentionedToToast_notification$data,
-  {history}: OnNextHistoryContext
+  notification: UnmaskedNotification<mapDiscussionMentionedToToast_notification$data>,
+  {navigate}: OnNextNavigateContext
 ): Snack | null => {
-  if (!notification) return null
   const {id: notificationId, meeting, author, discussion} = notification
   const authorName = author ? author.preferredName : 'Anonymous'
   const {id: meetingId, name: meetingName} = meeting
@@ -72,7 +72,7 @@ const mapDiscussionMentionedToToast = (
     action: {
       label: 'See the discussion',
       callback: () => {
-        history.push(
+        navigate(
           response ? `${directUrl}?responseId=${encodeURIComponent(response.id)}` : directUrl
         )
       }

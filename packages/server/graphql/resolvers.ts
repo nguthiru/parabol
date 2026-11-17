@@ -1,13 +1,14 @@
 import findStageById from 'parabol-client/utils/meetings/findStageById'
 import toTeamMemberId from 'parabol-client/utils/relay/toTeamMemberId'
-import type {NewMeetingPhaseTypeEnum} from '../database/types/GenericMeetingPhase'
 import type GenericMeetingStage from '../database/types/GenericMeetingStage'
 import type Organization from '../database/types/Organization'
 import type {Loaders} from '../dataloader/RootDataLoader'
 import type {Task, Team, User} from '../postgres/types'
 import type {AnyMeeting} from '../postgres/types/Meeting'
+import type {Newmeetingphasetypeenum} from '../postgres/types/pg'
 import {getUserId, isSuperUser} from '../utils/authorization'
 import type {GQLContext} from './graphql'
+import isValid from './isValid'
 
 export const resolveNewMeeting = (
   {
@@ -85,14 +86,15 @@ export const resolveGQLStageFromId = (stageId: string | undefined, meeting: AnyM
   const {stage} = stageRes
   return {
     ...stage,
-    meetingId
+    meetingId,
+    teamId: meeting.teamId
   }
 }
 
-export const augmentDBStage = (
-  stage: GenericMeetingStage,
+export const augmentDBStage = <TStage = GenericMeetingStage>(
+  stage: TStage,
   meetingId: string,
-  phaseType: NewMeetingPhaseTypeEnum,
+  phaseType: Newmeetingphasetypeenum,
   teamId: string
 ) => ({
   ...stage,
@@ -108,7 +110,7 @@ export const resolveGQLStagesFromPhase = ({
   teamId
 }: {
   meetingId: string
-  phaseType: NewMeetingPhaseTypeEnum
+  phaseType: Newmeetingphasetypeenum
   stages: GenericMeetingStage[]
   teamId: string
 }) => {
@@ -122,7 +124,7 @@ export const resolveUnlockedStages = async (
 ) => {
   if (!unlockedStageIds || unlockedStageIds.length === 0 || !meetingId) return undefined
   const meeting = await dataLoader.get('newMeetings').loadNonNull(meetingId)
-  return unlockedStageIds.map((stageId) => resolveGQLStageFromId(stageId, meeting))
+  return unlockedStageIds.map((stageId) => resolveGQLStageFromId(stageId, meeting)).filter(isValid)
 }
 
 export const resolveUser = (

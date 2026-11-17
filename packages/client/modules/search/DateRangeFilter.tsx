@@ -1,0 +1,160 @@
+import dayjs from 'dayjs'
+import {useState} from 'react'
+import {DayPicker} from 'react-day-picker'
+import {DateRange as DateRangeIcon} from '~/ui/icons'
+import type {SearchDateTypeEnum} from '../../__generated__/SearchDialogResultsQuery.graphql'
+import {Button} from '../../ui/Button/Button'
+import {Menu} from '../../ui/Menu/Menu'
+import {MenuContent} from '../../ui/Menu/MenuContent'
+import {Select} from '../../ui/Select/Select'
+import {SelectContent} from '../../ui/Select/SelectContent'
+import {SelectItem} from '../../ui/Select/SelectItem'
+import {SelectTrigger} from '../../ui/Select/SelectTrigger'
+import {SelectValue} from '../../ui/Select/SelectValue'
+import {ClearFilterIcon} from './ClearFilterIcon'
+
+export interface DateRange {
+  startAt?: string
+  endAt?: string
+}
+
+interface Props {
+  dateField: SearchDateTypeEnum
+  setDateField: (type: SearchDateTypeEnum) => void
+  dateRange: DateRange | undefined
+  setDateRange: (range: DateRange | undefined) => void
+}
+
+export const DateRangeFilter = ({dateField, setDateField, dateRange, setDateRange}: Props) => {
+  const handleQuickSelect = (days: number) => {
+    if (days === 0) {
+      // Today
+      setDateRange({
+        startAt: dayjs().startOf('day').toISOString(),
+        endAt: dayjs().endOf('day').toISOString()
+      })
+    } else {
+      setDateRange({
+        startAt: dayjs().subtract(days, 'day').startOf('day').toISOString(),
+        endAt: dayjs().endOf('day').toISOString()
+      })
+    }
+  }
+
+  const clearDateRange = () => {
+    setDateRange(undefined)
+    setDateField('updatedAt')
+  }
+
+  const selectedDates = {
+    from: dateRange?.startAt ? new Date(dateRange.startAt) : undefined,
+    to: dateRange?.endAt ? new Date(dateRange.endAt) : undefined
+  }
+
+  const dateRangeText = dateRange
+    ? `${dayjs(dateRange.startAt).format('MMM, DD')} - ${dayjs(dateRange.endAt).format('MMM, DD')}`
+    : 'Date Range'
+
+  const [open, setOpen] = useState(false)
+  const onOpenChange = (willOpen: boolean) => {
+    setOpen(willOpen)
+  }
+
+  return (
+    <Menu
+      open={open}
+      onOpenChange={onOpenChange}
+      trigger={
+        <Button
+          variant='flat'
+          data-dirty={dateRange ? '' : undefined}
+          className='group items-center justify-center rounded-xl p-1 px-2 text-fg-secondary text-sm hover:bg-surface-hover data-dirty:text-fg-primary'
+        >
+          <DateRangeIcon className='pr-1' />
+          <span>{dateRangeText}</span>
+          {dateRange && !open && (
+            <ClearFilterIcon
+              onClick={() => {
+                clearDateRange()
+              }}
+            />
+          )}
+        </Button>
+      }
+    >
+      <MenuContent
+        align='start'
+        sideOffset={4}
+        className='z-30 h-fit max-h-96 w-auto min-w-[300px] max-w-none border border-hairline p-4 shadow-xl'
+      >
+        <div className='flex flex-col'>
+          <div className='flex justify-between'>
+            <Select
+              value={dateField}
+              onValueChange={(val) => setDateField(val as SearchDateTypeEnum)}
+            >
+              <SelectTrigger className='h-fit w-fit justify-start border-none p-0 px-1 text-xs hover:bg-surface-hover'>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className='px-1'>
+                <SelectItem
+                  value='createdAt'
+                  className='rounded text-xs hover:bg-surface-hover'
+                  checkClassName='h-4 w-4'
+                >
+                  Created
+                </SelectItem>
+                <SelectItem
+                  value='updatedAt'
+                  className='rounded text-xs hover:bg-surface-hover'
+                  checkClassName='h-4 w-4'
+                >
+                  Last edited
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            {dateRange && (
+              <Button className='p-1 font-semibold text-xs' onClick={clearDateRange}>
+                Clear
+              </Button>
+            )}
+          </div>
+
+          <div className='flex justify-evenly'>
+            <button
+              className='cursor-pointer rounded p-1 text-left text-fg-primary text-sm hover:bg-surface-hover'
+              onClick={() => handleQuickSelect(0)}
+            >
+              Today
+            </button>
+            <button
+              className='cursor-pointer rounded p-1 text-left text-fg-primary text-sm hover:bg-surface-hover'
+              onClick={() => handleQuickSelect(7)}
+            >
+              Last 7 days
+            </button>
+            <button
+              className='cursor-pointer rounded p-1 text-left text-fg-primary text-sm hover:bg-surface-hover'
+              onClick={() => handleQuickSelect(30)}
+            >
+              Last 30 days
+            </button>
+          </div>
+
+          <div className='flex justify-center border-hairline border-t pt-4'>
+            <DayPicker
+              mode='range'
+              selected={selectedDates}
+              onSelect={(range) => {
+                setDateRange({
+                  startAt: range?.from?.toISOString(),
+                  endAt: range?.to?.toISOString()
+                })
+              }}
+            />
+          </div>
+        </div>
+      </MenuContent>
+    </Menu>
+  )
+}

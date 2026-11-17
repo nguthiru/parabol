@@ -1,6 +1,6 @@
 import graphql from 'babel-plugin-relay/macro'
 import {type PreloadedQuery, usePaginationFragment, usePreloadedQuery} from 'react-relay'
-import {Link} from 'react-router-dom'
+import {Link} from 'react-router'
 import halloweenRetrospectiveTemplate from '../../../../../static/images/illustrations/halloweenRetrospectiveTemplate.png'
 import type {JiraServerIntegrationResults_search$key} from '../../../__generated__/JiraServerIntegrationResults_search.graphql'
 import type {JiraServerIntegrationResultsQuery} from '../../../__generated__/JiraServerIntegrationResultsQuery.graphql'
@@ -16,7 +16,7 @@ interface Props {
 
 const JiraServerIntegrationResults = (props: Props) => {
   const {queryRef, teamId} = props
-  const query = usePreloadedQuery(
+  const query = usePreloadedQuery<JiraServerIntegrationResultsQuery>(
     graphql`
       query JiraServerIntegrationResultsQuery($teamId: ID!) {
         ...JiraServerIntegrationResults_search @arguments(teamId: $teamId)
@@ -87,14 +87,14 @@ const JiraServerIntegrationResults = (props: Props) => {
             return <JiraServerObjectCard key={idx} resultRef={result} />
           })
         ) : (
-          <div className='-mt-14 flex h-full flex-col items-center justify-center'>
+          <div className='flex flex-col items-center pt-12'>
             <img className='w-20' src={halloweenRetrospectiveTemplate} />
             <div className='mt-7 w-2/3 text-center'>
               {error?.message ? error.message : `Looks like you don’t have any issues to display.`}
             </div>
             <Link
               to={`/team/${teamId}/integrations`}
-              className='mt-4 font-semibold text-sky-500 hover:text-sky-400'
+              className='mt-4 font-semibold text-accent hover:text-sky-400'
             >
               Review your Jira Data Center configuration
             </Link>

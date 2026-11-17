@@ -1,5 +1,5 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
+import {useState} from 'react'
 import {useFragment} from 'react-relay'
 import type {BillingLeader_organization$key} from '../../../../__generated__/BillingLeader_organization.graphql'
 import type {BillingLeader_orgUser$key} from '../../../../__generated__/BillingLeader_orgUser.graphql'
@@ -10,23 +10,10 @@ import RowInfo from '../../../../components/Row/RowInfo'
 import RowInfoHeader from '../../../../components/Row/RowInfoHeader'
 import RowInfoHeading from '../../../../components/Row/RowInfoHeading'
 import BaseTag from '../../../../components/Tag/BaseTag'
-import useModal from '../../../../hooks/useModal'
+import {cn} from '../../../../ui/cn'
 import lazyPreload from '../../../../utils/lazyPreload'
 import LeaveOrgModal from '../LeaveOrgModal/LeaveOrgModal'
 import RemoveFromOrgModal from '../RemoveFromOrgModal/RemoveFromOrgModal'
-
-const StyledRow = styled(Row)<{isFirstRow: boolean}>(({isFirstRow}) => ({
-  padding: '12px 16px',
-  display: 'flex',
-  alignItems: 'center',
-  border: isFirstRow ? 'none' : undefined
-}))
-
-const ActionsBlock = styled('div')({
-  alignItems: 'center',
-  display: 'flex',
-  justifyContent: 'flex-end'
-})
 
 const OrgAdminActionMenu = lazyPreload(
   () =>
@@ -73,21 +60,13 @@ const BillingLeader = (props: Props) => {
     isOrgAdmin: isViewerOrgAdmin,
     isBillingLeader: isViewerBillingLeader
   } = organization
-  const {
-    togglePortal: toggleLeave,
-    modalPortal: leaveModal,
-    closePortal: closeLeaveModal
-  } = useModal()
-  const {
-    togglePortal: toggleRemove,
-    modalPortal: removeModal,
-    closePortal: closeRemoveModal
-  } = useModal()
+  const [isLeaveOpen, setIsLeaveOpen] = useState(false)
+  const [isRemoveOpen, setIsRemoveOpen] = useState(false)
   const {user: billingLeaderUser, role} = billingLeader
   const {id: userId, preferredName, picture} = billingLeaderUser
   const canEdit = isViewerOrgAdmin || (isViewerBillingLeader && role === 'BILLING_LEADER')
   return (
-    <StyledRow isFirstRow={isFirstRow}>
+    <Row className={cn('flex items-center px-4 py-3', isFirstRow && 'border-none')}>
       <Avatar picture={picture} className='h-11 w-11' />
       <RowInfo>
         <RowInfoHeader>
@@ -98,27 +77,26 @@ const BillingLeader = (props: Props) => {
         <BaseTag className='bg-gold-500 text-white'>Org Admin</BaseTag>
       )}
       <RowActions>
-        <ActionsBlock>
+        <div className='flex items-center justify-end'>
           {canEdit && (
             <OrgAdminActionMenu
               organization={organization}
               organizationUser={billingLeader}
-              toggleLeave={toggleLeave}
-              toggleRemove={toggleRemove}
+              toggleLeave={() => setIsLeaveOpen(true)}
+              toggleRemove={() => setIsRemoveOpen(true)}
             />
           )}
-        </ActionsBlock>
+        </div>
       </RowActions>
-      {leaveModal(<LeaveOrgModal orgId={orgId} closePortal={closeLeaveModal} />)}
-      {removeModal(
-        <RemoveFromOrgModal
-          orgId={orgId}
-          userIds={[userId]}
-          organizationUsers={[billingLeader]}
-          closePortal={closeRemoveModal}
-        />
-      )}
-    </StyledRow>
+      <LeaveOrgModal isOpen={isLeaveOpen} orgId={orgId} closePortal={() => setIsLeaveOpen(false)} />
+      <RemoveFromOrgModal
+        isOpen={isRemoveOpen}
+        orgId={orgId}
+        userIds={[userId]}
+        organizationUsers={[billingLeader]}
+        closePortal={() => setIsRemoveOpen(false)}
+      />
+    </Row>
   )
 }
 

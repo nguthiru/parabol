@@ -1,5 +1,4 @@
 import {Parser} from '@json2csv/plainjs'
-import FileDownloadIcon from '@mui/icons-material/FileDownload'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {type TableOptions, Table as TiptapTable} from '@tiptap/extension-table'
 import {
@@ -8,7 +7,8 @@ import {
   NodeViewWrapper,
   ReactNodeViewRenderer
 } from '@tiptap/react'
-import {useState} from 'react'
+import {useRef, useState} from 'react'
+import {FileDownload as FileDownloadIcon} from '~/ui/icons'
 import PlainButton from '../../../components/PlainButton/PlainButton'
 import {toSlug} from '../../../shared/toSlug'
 import {quickHash} from '../../../shared/utils/quickHash'
@@ -26,7 +26,7 @@ import EditTableSVG from './icons/EditTableSVG'
 import Toolbar from './icons/ToolbarSVG'
 
 const Item = twStyled(DropdownMenu.Item)`
-flex items-center gap-2 text-slate-700 hover:bg-slate-200 rounded px-2 py-1 cursor-pointer text-sm
+flex items-center gap-2 text-fg-primary hover:bg-surface-hover rounded px-3 py-2 cursor-pointer text-sm
 `
 
 type Highlight =
@@ -79,7 +79,25 @@ function Component(props: NodeViewProps) {
     }
   }
 
-  const selected = isActive()
+  const [isHovered, setIsHovered] = useState(false)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleMouseEnter = () => {
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
+    setIsHovered(true)
+  }
+
+  const handleMouseLeave = () => {
+    hideTimerRef.current = setTimeout(() => {
+      setIsHovered(false)
+      hideTimerRef.current = null
+    }, 200)
+  }
+
+  const selected = isActive() || isHovered
 
   const onOpenChange = (open: boolean) => {
     if (open) {
@@ -127,90 +145,104 @@ function Component(props: NodeViewProps) {
     document.body.removeChild(link)
   }
   return (
-    <NodeViewWrapper className='relative' data-highlight={highlight}>
+    <NodeViewWrapper
+      className='relative'
+      data-highlight={highlight}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
       <NodeViewContent
         as={'table' as 'div'}
-        className='w-full table-fixed border-collapse border-slate-300 text-slate-800'
+        className='w-full table-fixed border-collapse border-hairline text-fg-primary'
         {...props.HTMLAttributes}
       />
-      <DropdownMenu.Root onOpenChange={onOpenChange}>
-        <DropdownMenu.Trigger asChild>
-          <PlainButton
-            className={cn(
-              '-top-8 absolute right-8 flex size-7 items-center justify-center rounded bg-white text-slate-700 hover:bg-slate-300',
-              {hidden: !selected}
-            )}
-          >
-            <EditTableSVG />
-          </PlainButton>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            side='bottom'
-            align='start'
-            className='z-1 rounded bg-white p-2 shadow-lg'
-          >
-            <Item
-              onFocus={focus('header')}
-              onBlur={blur}
-              onSelect={() => editor.chain().focus().toggleHeaderRow().run()}
+      {editor.isEditable && (
+        <DropdownMenu.Root onOpenChange={onOpenChange}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenu.Trigger asChild>
+                <PlainButton
+                  onMouseDown={(e) => e.preventDefault()}
+                  className={cn(
+                    '-top-8 absolute right-8 flex size-7 items-center justify-center rounded bg-transparent text-fg-primary transition-opacity duration-300 hover:bg-surface-hover',
+                    selected ? 'opacity-100' : 'pointer-events-none opacity-0'
+                  )}
+                >
+                  <EditTableSVG />
+                </PlainButton>
+              </DropdownMenu.Trigger>
+            </TooltipTrigger>
+            <TooltipContent className='text-xs'>{'Edit Table'}</TooltipContent>
+          </Tooltip>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side='bottom'
+              align='start'
+              className='z-1 rounded bg-surface-card p-2 shadow-[var(--shadow-card-raised)]'
             >
-              <Toolbar />
-              Toggle header row
-            </Item>
-            <Item onFocus={focus('above')} onBlur={blur} onSelect={addRowAbove}>
-              <AddRowAbove />
-              Add row above
-            </Item>
-            <Item
-              onFocus={focus('below')}
-              onBlur={blur}
-              onSelect={() => editor.chain().focus().addRowAfter().run()}
-            >
-              <AddRowBelow />
-              Add row below
-            </Item>
-            <Item
-              onFocus={focus('row')}
-              onBlur={blur}
-              onSelect={() => editor.chain().focus().deleteRow().run()}
-            >
-              <Backspace />
-              Remove row
-            </Item>
-            <Item
-              onFocus={focus('before')}
-              onBlur={blur}
-              onSelect={() => editor.chain().focus().addColumnBefore().run()}
-            >
-              <AddColumnLeft />
-              Add column before
-            </Item>
-            <Item
-              onFocus={focus('after')}
-              onBlur={blur}
-              onSelect={() => editor.chain().focus().addColumnAfter().run()}
-            >
-              <AddColumnRight />
-              Add column after
-            </Item>
-            <Item
-              onFocus={focus('column')}
-              onBlur={blur}
-              onSelect={() => editor.chain().focus().deleteColumn().run()}
-            >
-              <Backspace />
-              Remove column
-            </Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+              <Item
+                onFocus={focus('header')}
+                onBlur={blur}
+                onSelect={() => editor.chain().focus().toggleHeaderRow().run()}
+              >
+                <Toolbar />
+                Toggle header row
+              </Item>
+              <Item onFocus={focus('above')} onBlur={blur} onSelect={addRowAbove}>
+                <AddRowAbove />
+                Add row above
+              </Item>
+              <Item
+                onFocus={focus('below')}
+                onBlur={blur}
+                onSelect={() => editor.chain().focus().addRowAfter().run()}
+              >
+                <AddRowBelow />
+                Add row below
+              </Item>
+              <Item
+                onFocus={focus('row')}
+                onBlur={blur}
+                onSelect={() => editor.chain().focus().deleteRow().run()}
+              >
+                <Backspace />
+                Remove row
+              </Item>
+              <Item
+                onFocus={focus('before')}
+                onBlur={blur}
+                onSelect={() => editor.chain().focus().addColumnBefore().run()}
+              >
+                <AddColumnLeft />
+                Add column before
+              </Item>
+              <Item
+                onFocus={focus('after')}
+                onBlur={blur}
+                onSelect={() => editor.chain().focus().addColumnAfter().run()}
+              >
+                <AddColumnRight />
+                Add column after
+              </Item>
+              <Item
+                onFocus={focus('column')}
+                onBlur={blur}
+                onSelect={() => editor.chain().focus().deleteColumn().run()}
+              >
+                <Backspace />
+                Remove column
+              </Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      )}
+
       <Tooltip>
         <TooltipTrigger asChild>
           <PlainButton
             className={cn(
-              '-top-8 absolute right-0 flex size-7 items-center justify-center rounded bg-white text-slate-700 hover:bg-slate-300',
-              {hidden: !selected}
+              '-top-8 absolute right-0 flex size-7 items-center justify-center rounded bg-transparent text-fg-primary transition-opacity duration-300 hover:bg-surface-hover',
+              selected ? 'opacity-100' : 'pointer-events-none opacity-0'
             )}
             onClick={exportToCSV}
           >

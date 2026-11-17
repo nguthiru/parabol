@@ -3,7 +3,7 @@ An instance of a meeting phase item. On the client, this usually represents a si
 """
 interface NewMeetingStage {
   """
-  stageId, shortid
+  The unique stage ID
   """
   id: ID!
 
@@ -13,17 +13,17 @@ interface NewMeetingStage {
   endAt: DateTime
 
   """
-  foreign key. try using meeting
+  The ID of the meeting this stage belongs to
   """
   meetingId: ID!
 
   """
   The meeting this stage belongs to
   """
-  meeting: NewMeeting
+  meeting: NewMeeting!
 
   """
-  true if the facilitator has completed this stage, else false. Should be boolean(endAt)
+  true if the facilitator has completed this stage, else false
   """
   isComplete: Boolean!
 
@@ -86,10 +86,20 @@ interface NewMeetingStage {
   The suggested time limit for a phase to be completed together, null if not enough data to make a suggestion
   """
   suggestedTimeLimit: Float
+
+  """
+  The team this stage belongs to
+  """
   teamId: ID!
 
   """
   The number of milliseconds left before the scheduled end time. Useful for unsynced client clocks. null if scheduledEndTime is null
   """
   timeRemaining: Float
+
+  """
+  The 0-based position of this stage within its phase, ordered by sortOrder.
+  Use stageIdx + 1 to construct deep-link URLs such as /meet/:meetingId/:phaseUrlSlug/:n.
+  """
+  stageIdx: Int!
 }

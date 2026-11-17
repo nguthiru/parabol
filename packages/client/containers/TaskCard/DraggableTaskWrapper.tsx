@@ -1,11 +1,5 @@
-import styled from '@emotion/styled'
-import {Draggable, type DraggableProvided, type DraggableStateSnapshot} from 'react-beautiful-dnd'
-
-const DraggableStyles = styled('div')({
-  // sometimes the default blue fuzzies show up around the containing div
-  outline: 'none',
-  padding: `6px 12px`
-})
+import {Draggable, type DraggableProvided, type DraggableStateSnapshot} from '@hello-pangea/dnd'
+import isTempId from '../../utils/relay/isTempId'
 
 interface Props {
   draggableId: string
@@ -19,15 +13,21 @@ interface Props {
 const DraggableTaskWrapper = (props: Props) => {
   const {draggableId, index, children} = props
   return (
-    <Draggable draggableId={draggableId} index={index} disableInteractiveElementBlocking={false}>
+    <Draggable
+      draggableId={draggableId}
+      index={index}
+      isDragDisabled={isTempId(draggableId)}
+      disableInteractiveElementBlocking={false}
+    >
       {(dragProvided: DraggableProvided, dragSnapshot: DraggableStateSnapshot) => (
-        <DraggableStyles
+        <div
+          className='px-3 py-1.5 outline-none'
           ref={dragProvided.innerRef}
           {...dragProvided.draggableProps}
           {...dragProvided.dragHandleProps}
         >
           {children(dragProvided, dragSnapshot)}
-        </DraggableStyles>
+        </div>
       )}
     </Draggable>
   )

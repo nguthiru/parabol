@@ -1,74 +1,29 @@
-import styled from '@emotion/styled'
-import {Close, Search} from '@mui/icons-material'
 import graphql from 'babel-plugin-relay/macro'
 import type * as React from 'react'
 import {useRef} from 'react'
 import {useFragment} from 'react-relay'
-import {matchPath, type RouteProps} from 'react-router'
+import {type Location, matchPath, useLocation} from 'react-router'
 import {commitLocalUpdate} from 'relay-runtime'
 import type {TopBarSearch_viewer$key} from '~/__generated__/TopBarSearch_viewer.graphql'
 import useAtmosphere from '~/hooks/useAtmosphere'
-import useRouter from '~/hooks/useRouter'
-import {PALETTE} from '~/styles/paletteV3'
+import {useSearchDialog} from '~/modules/search/SearchContext'
+import {Input} from '~/ui/Input/Input'
+import {Close, Search} from '~/ui/icons'
 import type Atmosphere from '../Atmosphere'
+import {cn} from '../ui/cn'
 
-const getShowSearch = (location: NonNullable<RouteProps['location']>) => {
+const getShowSearch = (location: Location) => {
   const {pathname} = location
   return (
     pathname.includes('/me/tasks') ||
-    !!matchPath(pathname, {
-      path: '/team/:teamId',
-      exact: true,
-      strict: false
-    }) ||
-    !!matchPath(pathname, {
-      path: '/team/:teamId/archive',
-      exact: true,
-      strict: false
-    }) ||
-    !!matchPath(pathname, {
-      path: '/meetings',
-      exact: true,
-      strict: false
-    })
+    !!matchPath('/team/:teamId', pathname) ||
+    !!matchPath('/team/:teamId/archive', pathname) ||
+    !!matchPath('/meetings', pathname)
   )
 }
 interface Props {
   viewer: TopBarSearch_viewer$key | null
 }
-
-const Wrapper = styled('div')<{location: any}>(({location}) => ({
-  alignItems: 'center',
-  backgroundColor: 'hsla(0,0%,100%,.125)',
-  borderRadius: 4,
-  display: 'flex',
-  flex: 1,
-  height: 40,
-  margin: 8,
-  maxWidth: 480,
-  visibility: getShowSearch(location) ? undefined : 'hidden'
-}))
-
-const SearchInput = styled('input')({
-  appearance: 'none',
-  border: '1px solid transparent',
-  color: PALETTE.SLATE_200,
-  fontSize: 20,
-  lineHeight: '24px',
-  margin: 0,
-  outline: 0,
-  padding: '12px 16px',
-  backgroundColor: 'transparent',
-  width: '100%'
-})
-
-const SearchIcon = styled('div')({
-  height: 24,
-  width: 24,
-  color: '#fff',
-  cursor: 'pointer',
-  margin: 12
-})
 
 const setSearch = (atmosphere: Atmosphere, value: string) => {
   commitLocalUpdate(atmosphere, (store) => {
@@ -91,22 +46,47 @@ const TopBarSearch = (props: Props) => {
   const dashSearch = viewer?.dashSearch ?? ''
   const inputRef = useRef<HTMLInputElement>(null)
   const atmosphere = useAtmosphere()
-  const {location} = useRouter()
+  const location = useLocation()
+  const {openSearch} = useSearchDialog()
+
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearch(atmosphere, e.target.value)
+    const {value} = e.target
+    setSearch(atmosphere, value)
   }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      openSearch(dashSearch)
+    }
+  }
+
   const Icon = dashSearch ? Close : Search
+
   const onClick = () => {
     setSearch(atmosphere, '')
     inputRef.current?.focus()
   }
+
   return (
-    <Wrapper location={location}>
-      <SearchInput ref={inputRef} onChange={onChange} placeholder={'Search'} value={dashSearch} />
-      <SearchIcon onClick={onClick}>
+    <div
+      className={cn(
+        'm-2 flex h-10 max-w-[480px] flex-1 items-center rounded bg-search-bg',
+        getShowSearch(location) ? 'visible' : 'invisible'
+      )}
+    >
+      <Input
+        ref={inputRef}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        placeholder={'Search'}
+        value={dashSearch}
+        className='m-0 h-full w-full appearance-none border-transparent bg-transparent px-4 py-3 text-fg-topbar text-xl leading-6 outline-none placeholder:text-search-placeholder focus:outline-none focus-visible:border-transparent'
+        maxLength={255}
+      />
+      <div className='m-3 h-6 w-6 cursor-pointer text-fg-topbar' onClick={onClick}>
         <Icon />
-      </SearchIcon>
-    </Wrapper>
+      </div>
+    </div>
   )
 }
 

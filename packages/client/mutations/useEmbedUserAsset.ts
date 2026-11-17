@@ -1,9 +1,11 @@
 import graphql from 'babel-plugin-relay/macro'
 import {type UseMutationConfig, useMutation} from 'react-relay'
 import type {useEmbedUserAssetMutation as TuseEmbedUserAssetMutation} from '../__generated__/useEmbedUserAssetMutation.graphql'
+import useAtmosphere from '../hooks/useAtmosphere'
+import {snackOnError} from './handlers/snackOnError'
 
 const mutation = graphql`
-  mutation useEmbedUserAssetMutation($url: String!, $scope: AssetScopeEnum!, $scopeKey: ID!) {
+  mutation useEmbedUserAssetMutation($url: URL!, $scope: AssetScopeEnum!, $scopeKey: ID!) {
     embedUserAsset(url: $url, scope: $scope, scopeKey: $scopeKey) {
       ... on ErrorPayload {
         error {
@@ -12,6 +14,9 @@ const mutation = graphql`
       }
       ... on UploadUserAssetSuccess {
         url
+        name
+        type
+        size
       }
     }
   }
@@ -19,9 +24,10 @@ const mutation = graphql`
 
 export const useEmbedUserAsset = () => {
   const [commit, submitting] = useMutation<TuseEmbedUserAssetMutation>(mutation)
+  const atmosphere = useAtmosphere()
 
   const execute = (config: UseMutationConfig<TuseEmbedUserAssetMutation>) => {
-    return commit(config)
+    return commit({onError: snackOnError(atmosphere), ...config})
   }
   return [execute, submitting] as const
 }

@@ -1,30 +1,5 @@
 type Mutation {
   """
-  Add a new feature flag
-  """
-  addFeatureFlag(
-    """
-    The name of the feature flag
-    """
-    featureName: String!
-
-    """
-    A description of the feature flag
-    """
-    description: String!
-
-    """
-    The expiration date of the feature flag
-    """
-    expiresAt: DateTime!
-
-    """
-    The scope of the feature flag
-    """
-    scope: FeatureFlagScope!
-  ): AddFeatureFlagPayload!
-
-  """
   Apply a feature flag to specified subjects (users, teams, or organizations)
   """
   applyFeatureFlag(
@@ -51,36 +26,6 @@ type Mutation {
     """
     subjects: SubjectsInput!
   ): RemoveFeatureFlagOwnerPayload!
-
-  """
-  Delete an existing feature flag
-  """
-  deleteFeatureFlag(
-    """
-    The name of the feature flag to delete
-    """
-    featureName: String!
-  ): DeleteFeatureFlagPayload!
-
-  """
-  Update an existing feature flag
-  """
-  updateFeatureFlag(
-    """
-    The name of the feature flag
-    """
-    featureName: String!
-
-    """
-    The new description of the feature flag (optional)
-    """
-    description: String
-
-    """
-    The new expiration date of the feature flag (optional)
-    """
-    expiresAt: DateTime
-  ): UpdateFeatureFlagPayload!
   """
   Updates the user email
   """
@@ -120,11 +65,6 @@ type Mutation {
   automatically pause users that have been inactive for 30 days. returns the number of users paused
   """
   autopauseUsers: Int
-
-  """
-  CURRENTLY BROKEN. copies all the records from PG for a list of organizations
-  """
-  backupOrganization(orgIds: [ID!]!): String!
 
   """
   profile the CPU
@@ -375,7 +315,7 @@ type Mutation {
   """
   updateOAuthRefreshTokens(
     """
-    Threshold date for `updatedAt` from AtlassianAuth
+    Threshold date for `updatedAt` from TeamMemberIntegrationAuth
     """
     updatedBefore: DateTime!
   ): Int
@@ -447,7 +387,17 @@ type Mutation {
     """
     Change the auth identity for users with this domain
     """
-    domain: String!
+    domain: String
+
+    """
+    Remove the auth identity for these users
+    """
+    userIds: [ID!]
+
+    """
+    Remove the auth identity for these emails
+    """
+    emails: [String!]
 
     """
     The type of auth to remove
@@ -473,6 +423,22 @@ type Mutation {
     templateIds: [ID!]
     templateNames: [String!]
   ): SetIsFreeMeetingTemplatePayload!
+
+  """
+  Assign a Stripe coupon to an organization, to be applied automatically when they upgrade.
+  The coupon must already exist in Stripe. It will be cleared from the org after use.
+  """
+  addOrgCoupon(
+    """
+    The ID of the organization
+    """
+    orgId: ID!
+
+    """
+    The Stripe coupon ID (e.g. "50PCT_6MO"). Must exist and be valid in Stripe.
+    """
+    couponId: ID!
+  ): AddOrgCouponSuccess!
 
   """
   Starts a free trial for the org iff the org is on a free tier.
@@ -515,7 +481,8 @@ type Mutation {
   ): ToggleAllowInsightsPayload!
 
   """
-  Describe the mutation here
+  Verify domains for an organization. The organization controls these domains.
+  An enterprise organization can manage SAML and SCIM for the domains it controls.
   """
   verifyDomain(
     """
@@ -561,4 +528,43 @@ type Mutation {
     """
     samlId: ID
   ): AssignSAMLIdToOrgPayload!
+
+  pruneFailedEmbeddingJobs(before: DateTime!): Int
+  buildEmbeddings(input: BuildEmbeddingsInput!): Int
+
+  """
+  Move specified orgs and/or domains into a target company cluster (or a newly created one).
+  At least one of orgIds or domains must be provided.
+  """
+  reassignToCompanyCluster(
+    """
+    The organization IDs to move
+    """
+    orgIds: [ID!]
+
+    """
+    The domains to move
+    """
+    domains: [String!]
+
+    """
+    The cluster to move the items into. If null, a new cluster will be created.
+    """
+    targetClusterId: ID
+  ): ReassignToCompanyClusterSuccess!
+
+  """
+  Set the maxTeamTrialExpiresAt on a team. Must be between now and 60 days in the future.
+  """
+  setTeamLimitAt(
+    """
+    The ID of the team
+    """
+    teamId: ID!
+
+    """
+    The new trial expiry date/time. Must be in the future and no more than 60 days out.
+    """
+    maxTeamLimitAt: DateTime!
+  ): SetTeamLimitAtSuccess!
 }

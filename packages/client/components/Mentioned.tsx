@@ -1,12 +1,10 @@
 import graphql from 'babel-plugin-relay/macro'
-import {useEffect} from 'react'
 import {useFragment} from 'react-relay'
+import {useNavigate} from 'react-router'
 import NotificationAction from '~/components/NotificationAction'
-import useAtmosphere from '~/hooks/useAtmosphere'
 import anonymousAvatar from '~/styles/theme/images/anonymous-avatar.svg'
 import type {Mentioned_notification$key} from '../__generated__/Mentioned_notification.graphql'
-import useRouter from '../hooks/useRouter'
-import SendClientSideEvent from '../utils/SendClientSideEvent'
+import sanitizeExternalHtml from '../utils/sanitizeExternalHtml'
 import NotificationTemplate from './NotificationTemplate'
 import {useTipTapContext} from './TipTapProvider'
 
@@ -20,8 +18,6 @@ const Mentioned = (props: Props) => {
     graphql`
       fragment Mentioned_notification on NotifyMentioned {
         ...NotificationTemplate_notification
-        type
-        status
         senderName
         senderPicture
         createdAt
@@ -35,29 +31,13 @@ const Mentioned = (props: Props) => {
     `,
     notificationRef
   )
-  const {history} = useRouter()
-  const atmosphere = useAtmosphere()
+  const navigate = useNavigate()
   const {generateHTML} = useTipTapContext()
-  const {
-    senderName,
-    senderPicture,
-    meetingId,
-    meetingName,
-    type,
-    status,
-    retroReflection,
-    retroDiscussStageIdx
-  } = notification
+  const {senderName, senderPicture, meetingId, meetingName, retroReflection, retroDiscussStageIdx} =
+    notification
 
   const isAnonymous = !senderName
   const authorName = isAnonymous ? 'Someone' : senderName
-
-  useEffect(() => {
-    SendClientSideEvent(atmosphere, 'Notification Viewed', {
-      notificationType: type,
-      notificationStatus: status
-    })
-  }, [])
 
   let locationType = 'their response'
   let actionLabel = 'See their response'
@@ -76,7 +56,7 @@ const Mentioned = (props: Props) => {
   const message = `${authorName} mentioned you in ${locationType} in ${meetingName}`
 
   const goThere = () => {
-    history.push(actionUrl)
+    navigate(actionUrl)
   }
 
   const htmlContent = previewContent ? generateHTML(JSON.parse(previewContent)) : ''
@@ -89,8 +69,8 @@ const Mentioned = (props: Props) => {
       action={<NotificationAction label={actionLabel} onClick={goThere} />}
     >
       {previewContent && (
-        <div className='mx-0 my-1 mt-4 rounded-sm bg-white p-2 text-sm leading-5 shadow-card'>
-          <div dangerouslySetInnerHTML={{__html: htmlContent}}></div>
+        <div className='mx-0 my-1 mt-4 rounded-sm bg-surface-card p-2 text-sm leading-5 shadow-[var(--shadow-card)]'>
+          <div dangerouslySetInnerHTML={{__html: sanitizeExternalHtml(htmlContent)}}></div>
         </div>
       )}
     </NotificationTemplate>

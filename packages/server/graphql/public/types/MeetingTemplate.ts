@@ -2,7 +2,13 @@ import TeamMemberId from 'parabol-client/shared/gqlIds/TeamMemberId'
 import {getUserId} from '../../../utils/authorization'
 import type {MeetingTemplateResolvers} from '../resolverTypes'
 
-const RECOMMENDED_TEMPLATES = ['startStopContinueTemplate', 'estimatedEffortTemplate']
+const RECOMMENDED_TEMPLATES = [
+  'startStopContinueTemplate',
+  'estimatedEffortTemplate',
+  'everythingBagelTemplate',
+  'teamPrompt',
+  'enterpriseDailyStandupTemplate'
+]
 
 const MeetingTemplate: MeetingTemplateResolvers = {
   category: ({mainCategory}, _args, _context) => mainCategory,
@@ -11,9 +17,6 @@ const MeetingTemplate: MeetingTemplateResolvers = {
   },
   team: async ({teamId}, _args, {dataLoader}) => {
     return dataLoader.get('teams').loadNonNull(teamId)
-  },
-  illustrationUrl: async ({illustrationUrl}, _args, {dataLoader}) => {
-    return dataLoader.get('fileStoreAsset').load(illustrationUrl)
   },
   viewerLowestScope: async ({teamId, orgId}, _args, {authToken, dataLoader}) => {
     if (teamId === 'aGhostTeam') return 'PUBLIC'

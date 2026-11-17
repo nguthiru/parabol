@@ -1,6 +1,8 @@
+import {DataLoaderWorker} from '../../graphql/graphql'
 import {redisHocusPocus} from '../../hocusPocus'
 import getKysely from '../../postgres/getKysely'
 import {CipherId} from '../CipherId'
+import {Logger} from '../Logger'
 
 export const removeAllBacklinkedPageLinkBlocks = async ({pageId}: {pageId: number}) => {
   const pg = getKysely()
@@ -11,12 +13,12 @@ export const removeAllBacklinkedPageLinkBlocks = async ({pageId}: {pageId: numbe
     .execute()
   const pageCode = CipherId.encrypt(pageId)
 
-  await Promise.all([
+  await Promise.all(
     backLinks.map(async ({fromPageId}) => {
       const documentName = CipherId.toClient(fromPageId, 'page')
       await redisHocusPocus.handleEvent('removeBacklinkedPageLinkBlocks', documentName, {pageCode})
     })
-  ])
+  )
 }
 
 export const updateAllBacklinkedPageLinkTitles = async ({
@@ -27,6 +29,12 @@ export const updateAllBacklinkedPageLinkTitles = async ({
   title: string
 }) => {
   const pg = getKysely()
+  const page = await pg
+    .selectFrom('Page')
+    .select('isSyncedBlock')
+    .where('id', '=', pageId)
+    .executeTakeFirst()
+  if (page?.isSyncedBlock) return
   const backLinks = await pg
     .selectFrom('PageBacklink')
     .select('fromPageId')
@@ -34,7 +42,7 @@ export const updateAllBacklinkedPageLinkTitles = async ({
     .execute()
   const pageCode = CipherId.encrypt(pageId)
 
-  await Promise.all([
+  await Promise.all(
     backLinks.map(async ({fromPageId}) => {
       const documentName = CipherId.toClient(fromPageId, 'page')
       await redisHocusPocus.handleEvent('updateBacklinkedPageLinkTitles', documentName, {
@@ -42,5 +50,33 @@ export const updateAllBacklinkedPageLinkTitles = async ({
         title
       })
     })
-  ])
+  )
+}
+
+export const broadcastUserMentionUpdate = async (
+  userId: string,
+  preferredName: string,
+  dataLoader: DataLoaderWorker,
+  pageIds?: number[]
+) => {
+  const targetPageIds =
+    pageIds ?? (await dataLoader.get('pageAccessByUserId').load(userId)).map((p) => p.pageId)
+
+  targetPageIds.forEach((pageId) => {
+    const documentName = CipherId.toClient(pageId, 'page')
+    const payload = {userId, preferredName}
+    redisHocusPocus.handleEvent('updateUserMention', documentName, payload, true).catch(Logger.log)
+  })
+}
+
+export const publishSyncedBlockPlacementsChanged = (blockPageId: number) => {
+  const documentName = CipherId.toClient(blockPageId, 'page')
+  redisHocusPocus
+    .handleEvent('broadcastSyncedBlockPlacementsChanged', documentName, {}, true)
+    .catch(Logger.log)
+}
+
+export const replacePageAssetSrc = async (pageId: number, src: string, hostedSrc: string) => {
+  const documentName = CipherId.toClient(pageId, 'page')
+  await redisHocusPocus.handleEvent('replaceAssetSrc', documentName, {src, hostedSrc})
 }

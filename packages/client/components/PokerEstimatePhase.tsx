@@ -1,15 +1,14 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
-import useBreakpoint from '~/hooks/useBreakpoint'
 import type useGotoStageId from '~/hooks/useGotoStageId'
 import useRightDrawer from '~/hooks/useRightDrawer'
-import {Breakpoint, DiscussionThreadEnum} from '~/types/constEnums'
+import {DiscussionThreadEnum} from '~/types/constEnums'
 import type {PokerEstimatePhase_meeting$key} from '../__generated__/PokerEstimatePhase_meeting.graphql'
 import {phaseLabelLookup} from '../utils/meetings/lookups'
+import DiscussionDrawer from './DiscussionDrawer'
+import type {DiscussionThreadables} from './DiscussionThreadList'
 import ErrorBoundary from './ErrorBoundary'
 import EstimatePhaseArea from './EstimatePhaseArea'
-import EstimatePhaseDiscussionDrawer from './EstimatePhaseDiscussionDrawer'
 import MeetingContent from './MeetingContent'
 import MeetingHeaderAndPhase from './MeetingHeaderAndPhase'
 import MeetingTopBar from './MeetingTopBar'
@@ -19,29 +18,6 @@ import PokerEstimateHeaderCard from './PokerEstimateHeaderCard'
 import type {PokerMeetingPhaseProps} from './PokerMeeting'
 import ResponsiveDashSidebar from './ResponsiveDashSidebar'
 import StageTimerDisplay from './StageTimerDisplay'
-
-const StyledMeetingHeaderAndPhase = styled(MeetingHeaderAndPhase)<{
-  isOpen: boolean
-}>(({isOpen}) => ({
-  width: isOpen ? `calc(100% - ${DiscussionThreadEnum.WIDTH}px)` : '100%',
-  [`@media screen and (max-width: ${Breakpoint.POKER_DISCUSSION_FULLSCREEN_DRAWER}px)`]: {
-    width: '100%'
-  }
-}))
-
-const StoryAndEstimateWrapper = styled('div')({
-  display: 'flex',
-  flex: 1,
-  overflowY: 'auto',
-  overflowX: 'hidden',
-  flexDirection: 'column'
-})
-
-const EstimateAreaWrapper = styled('div')({
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'column'
-})
 
 interface Props extends PokerMeetingPhaseProps {
   gotoStageId: ReturnType<typeof useGotoStageId>
@@ -56,22 +32,28 @@ const PokerEstimatePhase = (props: Props) => {
         ...StageTimerDisplay_meeting
         ...StageTimerControl_meeting
         ...EstimatePhaseArea_meeting
+        ...DiscussionDrawerTranscripts_meeting
         id
         endedAt
         isCommentUnread
-        isRightDrawerOpen
+        rightDrawerOpen
         localStage {
-          ...PokerEstimateHeaderCard_stage
+          ...PokerEstimateHeaderCard_stage @alias
+          ... on EstimateStage {
+            discussionId
+          }
         }
         phases {
           ... on EstimatePhase {
             stages {
               ...PokerEstimateHeaderCard_stage
+              ... on EstimateStage {
+                discussionId
+              }
             }
           }
         }
         showSidebar
-        ...EstimatePhaseDiscussionDrawer_meeting
       }
     `,
     meetingRef
@@ -81,47 +63,49 @@ const PokerEstimatePhase = (props: Props) => {
     localStage,
     endedAt,
     isCommentUnread,
-    isRightDrawerOpen,
+    rightDrawerOpen,
     showSidebar
   } = meeting
-  const isDesktop = useBreakpoint(Breakpoint.SIDEBAR_LEFT)
-  const toggleDrawer = useRightDrawer(meetingId)
+  const [toggleDrawer] = useRightDrawer(meetingId)
   if (!localStage) return null
+  const allowedThreadables: DiscussionThreadables[] = endedAt ? [] : ['comment']
   return (
     <MeetingContent>
-      <StyledMeetingHeaderAndPhase isOpen={isRightDrawerOpen} hideBottomBar={!!endedAt}>
+      <MeetingHeaderAndPhase hideBottomBar={!!endedAt}>
         <MeetingTopBar
           avatarGroup={avatarGroup}
           isCommentUnread={isCommentUnread}
           isMeetingSidebarCollapsed={!showSidebar}
-          isRightDrawerOpen={isRightDrawerOpen}
+          rightDrawerOpen={rightDrawerOpen}
           toggleSidebar={toggleSidebar}
           toggleDrawer={toggleDrawer}
         >
           <PhaseHeaderTitle>{phaseLabelLookup.ESTIMATE}</PhaseHeaderTitle>
           <PhaseHeaderDescription>{'Estimate each story as a team'}</PhaseHeaderDescription>
         </MeetingTopBar>
-        <StoryAndEstimateWrapper>
+        <div className='flex flex-1 flex-col overflow-y-auto overflow-x-hidden'>
           <ErrorBoundary>
-            <PokerEstimateHeaderCard stage={localStage} />
+            {localStage.PokerEstimateHeaderCard_stage && (
+              <PokerEstimateHeaderCard stage={localStage.PokerEstimateHeaderCard_stage} />
+            )}
           </ErrorBoundary>
           <StageTimerDisplay meeting={meeting} />
-          <EstimateAreaWrapper>
+          <div className='flex flex-1 flex-col'>
             <EstimatePhaseArea gotoStageId={gotoStageId} meeting={meeting} />
-          </EstimateAreaWrapper>
-        </StoryAndEstimateWrapper>
-      </StyledMeetingHeaderAndPhase>
+          </div>
+        </div>
+      </MeetingHeaderAndPhase>
       <ResponsiveDashSidebar
-        isOpen={isRightDrawerOpen}
+        isOpen={rightDrawerOpen != null}
         isRightDrawer
         onToggle={toggleDrawer}
         sidebarWidth={DiscussionThreadEnum.WIDTH}
       >
-        <EstimatePhaseDiscussionDrawer
-          isDesktop={isDesktop}
-          isOpen={isRightDrawerOpen}
-          meeting={meeting}
+        <DiscussionDrawer
+          discussionId={localStage.discussionId!}
           onToggle={toggleDrawer}
+          allowedThreadables={allowedThreadables}
+          meetingRef={meeting}
         />
       </ResponsiveDashSidebar>
     </MeetingContent>

@@ -1,7 +1,13 @@
 """
-An action meeting
+A Check-In meeting (also called an Action meeting). A structured team standup where members check in, review agenda items, and create or update tasks. Use to query details of a completed or in-progress Check-In meeting.
 """
 type ActionMeeting implements NewMeeting {
+  """
+  The viewer's most recently generated AI inspiration items for a given integration service,
+  cached for a short window. Empty if none have been generated recently.
+  """
+  inspirationItems(service: ServiceEnum!): [InspirationItem!]!
+
   """
   The unique meeting id. shortid.
   """
@@ -66,6 +72,9 @@ type ActionMeeting implements NewMeeting {
   The meeting series this meeting is associated with if the meeting is recurring
   """
   meetingSeries: MeetingSeries
+  """
+  Always ACTION for this meeting type
+  """
   meetingType: MeetingTypeEnum!
 
   """
@@ -147,5 +156,8 @@ type ActionMeeting implements NewMeeting {
   The tasks created within the meeting
   """
   tasks: [Task!]!
+  """
+  The ID of the publicly shareable summary page for this meeting, if one has been generated
+  """
   summaryPageId: ID
 }

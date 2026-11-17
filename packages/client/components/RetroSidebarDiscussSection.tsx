@@ -1,7 +1,5 @@
-import styled from '@emotion/styled'
-import {ThumbUp} from '@mui/icons-material'
+import {DragDropContext, Draggable, Droppable, type DropResult} from '@hello-pangea/dnd'
 import graphql from 'babel-plugin-relay/macro'
-import {DragDropContext, Draggable, Droppable, type DropResult} from 'react-beautiful-dnd'
 import {useFragment} from 'react-relay'
 import type {
   RetroSidebarDiscussSection_meeting$data,
@@ -10,16 +8,17 @@ import type {
 import useAtmosphere from '~/hooks/useAtmosphere'
 import type useGotoStageId from '~/hooks/useGotoStageId'
 import type {DeepNonNullable} from '~/types/generics'
+import {ThumbUp} from '~/ui/icons'
 import DragDiscussionTopicMutation from '../mutations/DragDiscussionTopicMutation'
-import {navItemRaised} from '../styles/elevation'
-import {PALETTE} from '../styles/paletteV3'
-import {NavSidebar} from '../types/constEnums'
+import {cn} from '../ui/cn'
 import {DISCUSSION_TOPIC, SORT_STEP} from '../utils/constants'
 import dndNoise from '../utils/dndNoise'
 import MeetingSidebarPhaseItemChild from './MeetingSidebarPhaseItemChild'
 import MeetingSubnavItem from './MeetingSubnavItem'
 
-const lineHeight = NavSidebar.SUB_LINE_HEIGHT
+// navItemRaised (Elevation.Z8)
+const navItemRaisedShadowCls =
+  'shadow-[0px_5px_5px_-3px_rgba(0,0,0,.2),0px_8px_10px_1px_rgba(0,0,0,.14),0px_3px_14px_2px_rgba(0,0,0,.12)]'
 
 interface Props {
   gotoStageId: ReturnType<typeof useGotoStageId>
@@ -27,38 +26,10 @@ interface Props {
   meeting: RetroSidebarDiscussSection_meeting$key
 }
 
-const VoteTally = styled('div')<{isUnsyncedFacilitatorStage: boolean | null}>(
-  ({isUnsyncedFacilitatorStage}) => ({
-    alignItems: 'center',
-    color: isUnsyncedFacilitatorStage ? PALETTE.ROSE_500 : PALETTE.SLATE_600,
-    display: 'flex',
-    fontSize: NavSidebar.SUB_FONT_SIZE,
-    fontWeight: 600,
-    height: lineHeight,
-    lineHeight,
-    marginRight: 8
-  })
-)
-
-const VoteIcon = styled(ThumbUp)({
-  color: 'inherit',
-  height: 18,
-  width: 18,
-  marginRight: 2
-})
-
-const DraggableMeetingSubnavItem = styled('div')<{isDragging: boolean}>(({isDragging}) => ({
-  boxShadow: isDragging ? navItemRaised : undefined
-}))
-
-const ScrollWrapper = styled('div')({
-  overflow: 'auto',
-  paddingBottom: 8,
-  paddingRight: 8,
-  height: '100%'
-})
-
-type NonNullPhase = DeepNonNullable<RetroSidebarDiscussSection_meeting$data['phases'][0]>
+type DiscussPhase = NonNullable<
+  RetroSidebarDiscussSection_meeting$data['phases'][0]['RetroSidebarDiscussSectionDiscussPhase']
+>
+type NonNullPhase = DeepNonNullable<DiscussPhase>
 
 const RetroSidebarDiscussSection = (props: Props) => {
   const atmosphere = useAtmosphere()
@@ -74,7 +45,7 @@ const RetroSidebarDiscussSection = (props: Props) => {
         facilitatorStageId
         # load up the localPhase
         phases {
-          ...RetroSidebarDiscussSectionDiscussPhase @relay(mask: false)
+          ...RetroSidebarDiscussSectionDiscussPhase @relay(mask: false) @alias
         }
         localStage {
           id
@@ -84,7 +55,10 @@ const RetroSidebarDiscussSection = (props: Props) => {
     meetingRef
   )
   const {localStage, facilitatorStageId, id: meetingId, phases, endedAt} = meeting
-  const discussPhase = phases.find(({phaseType}) => phaseType === 'discuss')
+  const discussPhase = phases.find(
+    ({RetroSidebarDiscussSectionDiscussPhase}) =>
+      RetroSidebarDiscussSectionDiscussPhase?.phaseType === 'discuss'
+  )?.RetroSidebarDiscussSectionDiscussPhase
   // assert that the discuss phase and its stages are non-null
   // since we render this component when the vote phase is complete
   // see: RetroSidebarPhaseListItemChildren.tsx
@@ -136,18 +110,32 @@ const RetroSidebarDiscussSection = (props: Props) => {
         <Droppable droppableId={DISCUSSION_TOPIC}>
           {(provided) => {
             return (
-              <ScrollWrapper data-cy='discussion-section' ref={provided.innerRef}>
+              <div className='h-full overflow-auto pb-2' ref={provided.innerRef}>
                 {stages.map((stage, idx) => {
                   const {reflectionGroup} = stage
                   if (!reflectionGroup) return null
-                  const {title, voteCount} = reflectionGroup
+                  const {title, voteCount, reflections} = reflectionGroup
+                  const reflectionColors = (reflections ?? []).map(({prompt}) => prompt.groupColor)
+                  const colors = [...new Set(reflectionColors)]
+                    .sort(
+                      (a, b) =>
+                        reflectionColors.filter((v) => v === b).length -
+                        reflectionColors.filter((v) => v === a).length
+                    )
+                    .slice(0, 3)
                   // the local user is at another stage than the facilitator stage
                   const isUnsyncedFacilitatorStage = !inSync && stage.id === facilitatorStageId
                   const voteMeta = (
-                    <VoteTally isUnsyncedFacilitatorStage={isUnsyncedFacilitatorStage}>
-                      <VoteIcon />
+                    // NavSidebar.SUB_FONT_SIZE === 14px, SUB_LINE_HEIGHT === 22px
+                    <div
+                      className={cn(
+                        'flex h-[22px] items-center font-semibold text-sm leading-[22px]',
+                        isUnsyncedFacilitatorStage ? 'text-rose-500' : 'text-fg-nav-muted'
+                      )}
+                    >
+                      <ThumbUp className='mr-0.5 h-4.5 w-4.5 text-inherit' />
                       {voteCount || 0}
-                    </VoteTally>
+                    </div>
                   )
                   return (
                     <Draggable
@@ -158,9 +146,8 @@ const RetroSidebarDiscussSection = (props: Props) => {
                     >
                       {(dragProvided, dragSnapshot) => {
                         return (
-                          <DraggableMeetingSubnavItem
-                            data-cy={`discuss-item-${idx}`}
-                            isDragging={dragSnapshot.isDragging}
+                          <div
+                            className={cn(dragSnapshot.isDragging && navItemRaisedShadowCls)}
                             ref={dragProvided.innerRef}
                             {...dragProvided.draggableProps}
                             {...dragProvided.dragHandleProps}
@@ -175,16 +162,47 @@ const RetroSidebarDiscussSection = (props: Props) => {
                               isDisabled={!stage.isNavigable}
                               isUnsyncedFacilitatorStage={isUnsyncedFacilitatorStage}
                             >
-                              {title!}
+                              <div className='flex w-full items-center space-x-0.5'>
+                                <div>
+                                  {colors.map((color, idx) => {
+                                    const DOT_SIZE = 8
+                                    const TOTAL_HEIGHT = 18
+                                    const DESIRED_VISIBLE = 4 // how much of each lower dot shows
+
+                                    const visible =
+                                      colors.length > 1
+                                        ? Math.min(
+                                            DESIRED_VISIBLE,
+                                            (TOTAL_HEIGHT - DOT_SIZE) / (colors.length - 1)
+                                          )
+                                        : 0
+
+                                    const overlap = DOT_SIZE - visible
+
+                                    return (
+                                      <div
+                                        key={idx}
+                                        style={{
+                                          backgroundColor: color,
+                                          marginTop: idx === 0 ? 0 : -overlap,
+                                          zIndex: colors.length - idx
+                                        }}
+                                        className='relative h-2 w-2 rounded-full'
+                                      />
+                                    )
+                                  })}
+                                </div>
+                                <div>{title!}</div>
+                              </div>
                             </MeetingSubnavItem>
-                          </DraggableMeetingSubnavItem>
+                          </div>
                         )
                       }}
                     </Draggable>
                   )
                 })}
                 {provided.placeholder}
-              </ScrollWrapper>
+              </div>
             )
           }}
         </Droppable>
@@ -203,6 +221,11 @@ graphql`
       reflectionGroup {
         title
         voteCount
+        reflections {
+          prompt {
+            groupColor
+          }
+        }
       }
       sortOrder
     }

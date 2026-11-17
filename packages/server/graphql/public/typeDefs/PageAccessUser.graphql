@@ -1,4 +1,14 @@
+"""
+A specific user who has been granted explicit access to a page
+"""
 type PageAccessUser {
-  user: UserPreview!
+  """
+  The user who was granted access
+  """
+  user: User!
+
+  """
+  The access role granted to this user
+  """
   role: PageRoleEnum!
 }

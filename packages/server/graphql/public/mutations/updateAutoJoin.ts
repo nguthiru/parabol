@@ -1,14 +1,15 @@
+import {GraphQLError} from 'graphql'
 import getKysely from '../../../postgres/getKysely'
 import {getUserId, isSuperUser, isUserBillingLeader} from '../../../utils/authorization'
-import standardError from '../../../utils/standardError'
 import isValid from '../../isValid'
 import type {MutationResolvers} from '../resolverTypes'
 
 const updateAutoJoin: MutationResolvers['updateAutoJoin'] = async (
   _source,
   {teamIds, autoJoin},
-  {authToken, dataLoader}
+  context
 ) => {
+  const {authToken, dataLoader} = context
   const viewerId = getUserId(authToken)
   if (!isSuperUser(authToken)) {
     const viewerTeams = (await dataLoader.get('teams').loadMany(teamIds)).filter(isValid)
@@ -16,8 +17,14 @@ const updateAutoJoin: MutationResolvers['updateAutoJoin'] = async (
       viewerTeams.map(({orgId}) => isUserBillingLeader(viewerId, orgId, dataLoader))
     )
     if (!billingLeaders.every(Boolean)) {
-      return standardError(new Error('Viewer is not billing leader'), {
-        userId: viewerId
+      throw new GraphQLError('Viewer is not billing leader', {extensions: {code: 'FORBIDDEN'}})
+    }
+  }
+  if (context.resourceGrants) {
+    const hasAccess = await Promise.all(teamIds.map((id) => context.resourceGrants!.hasTeam(id)))
+    if (hasAccess.some((v) => !v)) {
+      throw new GraphQLError('PAT does not grant access to this team', {
+        extensions: {code: 'FORBIDDEN'}
       })
     }
   }

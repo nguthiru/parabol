@@ -4,15 +4,17 @@ import {selectNotifications} from '../../../postgres/select'
 
 const handleTeamInviteToken = async (
   invitationToken: string,
-  viewerId: string,
+  viewer: {id: string; email: string},
   tms: string[],
   notificationId?: string
 ) => {
+  const {id: viewerId, email} = viewer
   const pg = getKysely()
   const invitation = await pg
     .selectFrom('TeamInvitation')
     .selectAll()
     .where('token', '=', invitationToken)
+    .where('email', '=', email)
     .limit(1)
     .executeTakeFirst()
   if (!invitation) return {error: InvitationTokenError.NOT_FOUND}

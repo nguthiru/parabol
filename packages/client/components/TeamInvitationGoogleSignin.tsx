@@ -1,9 +1,8 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
+import {useParams} from 'react-router'
 import type {TeamInvitationGoogleSignin_verifiedInvitation$key} from '../__generated__/TeamInvitationGoogleSignin_verifiedInvitation.graphql'
 import useDocumentTitle from '../hooks/useDocumentTitle'
-import useRouter from '../hooks/useRouter'
 import DialogContent from './DialogContent'
 import DialogTitle from './DialogTitle'
 import GoogleOAuthButtonBlock from './GoogleOAuthButtonBlock'
@@ -15,15 +14,9 @@ interface Props {
   verifiedInvitation: TeamInvitationGoogleSignin_verifiedInvitation$key
 }
 
-const TeamName = styled('span')({
-  fontWeight: 600,
-  whiteSpace: 'nowrap'
-})
-
 const TeamInvitationGoogleSignin = (props: Props) => {
-  const {match} = useRouter<{token: string}>()
-  const {params} = match
-  const {token: invitationToken} = params
+  const {token} = useParams()
+  const invitationToken = token!
   const {verifiedInvitation: verifiedInvitationRef} = props
   const verifiedInvitation = useFragment(
     graphql`
@@ -51,7 +44,7 @@ const TeamInvitationGoogleSignin = (props: Props) => {
         <InvitationDialogCopy>
           Tap below
           {meetingName ? ` to join ${meetingName} for: ` : ' for immediate access to your team: '}
-          <TeamName>{teamName}</TeamName>
+          <span className='whitespace-nowrap font-semibold'>{teamName}</span>
         </InvitationDialogCopy>
         <InvitationCenteredCopy>
           <GoogleOAuthButtonBlock loginHint={email} invitationToken={invitationToken} />

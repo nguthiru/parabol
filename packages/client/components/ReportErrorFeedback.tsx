@@ -1,126 +1,80 @@
-import styled from '@emotion/styled'
 import type * as React from 'react'
-import {useEffect, useState} from 'react'
-import {PALETTE} from '~/styles/paletteV3'
+import {useState} from 'react'
+import useSubmitErrorFeedbackMutation from '../mutations/useSubmitErrorFeedbackMutation'
 import {LocalStorageKey} from '../types/constEnums'
-import DialogContainer from './DialogContainer'
-import DialogContent from './DialogContent'
-import DialogTitle from './DialogTitle'
+import {Button} from '../ui/Button/Button'
+import {Dialog} from '../ui/Dialog/Dialog'
+import {DialogActions} from '../ui/Dialog/DialogActions'
+import {DialogContent} from '../ui/Dialog/DialogContent'
+import {DialogTitle} from '../ui/Dialog/DialogTitle'
+import getMutationError from '../utils/relay/getMutationError'
 import BasicTextArea from './InputField/BasicTextArea'
-import PrimaryButton from './PrimaryButton'
 
 interface Props {
-  closePortal: () => void
+  isOpen: boolean
+  onClose: () => void
   error: Error
   eventId: string
 }
 
-export const ERROR_FEEDBACK_ENABLED = !!window.__ACTION__.HUBSPOT_ERROR_FORM_URL
-
-const INVITE_DIALOG_BREAKPOINT = 864
-const INVITE_DIALOG_MEDIA_QUERY = `@media (min-width: ${INVITE_DIALOG_BREAKPOINT}px)`
-
-const StyledDialogContainer = styled(DialogContainer)({
-  width: 480
-})
-
-const StyledDialogTitle = styled(DialogTitle)({
-  [INVITE_DIALOG_MEDIA_QUERY]: {
-    fontSize: 24,
-    lineHeight: '32px',
-    marginBottom: 8,
-    paddingLeft: 32,
-    paddingTop: 24
-  }
-})
-
-const StyledDialogContent = styled(DialogContent)({
-  display: 'flex',
-  flexDirection: 'column',
-  [INVITE_DIALOG_MEDIA_QUERY]: {
-    padding: '16px 32px 32px'
-  }
-})
-
-const ButtonGroup = styled('div')({
-  marginTop: '24px',
-  display: 'flex',
-  justifyContent: 'flex-end'
-})
-
-const Description = styled('div')({
-  color: PALETTE.SLATE_700,
-  fontSize: 14,
-  lineHeight: 1.5,
-  paddingLeft: 24,
-  [INVITE_DIALOG_MEDIA_QUERY]: {
-    paddingLeft: 32
-  }
-})
-
 const ReportErrorFeedback = (props: Props) => {
-  const {closePortal, error, eventId} = props
+  const {isOpen, onClose, error, eventId} = props
   const [text, setText] = useState('')
+  const [submitError, setSubmitError] = useState<string>()
+  const [execute, submitting] = useSubmitErrorFeedbackMutation()
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const nextValue = e.target.value
-    setText(nextValue)
+    setText(e.target.value)
+    setSubmitError(undefined)
   }
-  const url = window.__ACTION__.HUBSPOT_ERROR_FORM_URL
-  useEffect(() => {
-    if (!url) {
-      closePortal()
-    }
-  }, [url, closePortal])
-  if (!url) {
-    return null
-  }
-  const email = window.localStorage.getItem(LocalStorageKey.EMAIL)
 
   const onSubmit = () => {
-    if (!text) return
-    const body = JSON.stringify({
-      fields: [
-        {
-          name: 'email',
-          value: email || 'errors@parabol.co'
-        },
-        {
-          name: 'TICKET.subject',
-          value: error.message
-        },
-        {
-          name: 'TICKET.content',
-          value: text
-        },
-        {
-          name: 'TICKET.eventid',
-          value: eventId
-        }
-      ]
-    })
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+    if (!text.trim() || submitting) return
+    const email = window.localStorage.getItem(LocalStorageKey.EMAIL)
+    execute({
+      variables: {
+        errorMessage: error.message,
+        content: text,
+        eventId,
+        email
       },
-      body
+      onCompleted: (_res, errors) => {
+        if (errors?.length) {
+          setSubmitError(errors[0]!.message)
+          return
+        }
+        setText('')
+        onClose()
+      },
+      onError: (err) => setSubmitError(getMutationError(err).message)
     })
-    closePortal()
   }
 
   return (
-    <StyledDialogContainer>
-      <StyledDialogTitle>Report Error</StyledDialogTitle>
-      <Description>What were you doing when the error happened?</Description>
-      <StyledDialogContent>
-        <BasicTextArea autoFocus name='errorReport' onChange={onChange} value={text} />
-        <ButtonGroup>
-          <PrimaryButton onClick={onSubmit} disabled={text.length === 0} size='medium'>
+    <Dialog isOpen={isOpen} onClose={onClose}>
+      <DialogContent>
+        <DialogTitle className='mb-4'>Report Error</DialogTitle>
+        <div className='mb-4 pl-0 text-fg-primary text-sm'>
+          What were you doing when the error happened?
+        </div>
+        <BasicTextArea
+          autoFocus
+          name='errorReport'
+          onChange={onChange}
+          value={text}
+          error={submitError}
+        />
+        <DialogActions>
+          <Button
+            variant='primary'
+            onClick={onSubmit}
+            disabled={text.trim().length === 0 || submitting}
+            size='md'
+          >
             {'Submit Report'}
-          </PrimaryButton>
-        </ButtonGroup>
-      </StyledDialogContent>
-    </StyledDialogContainer>
+          </Button>
+        </DialogActions>
+      </DialogContent>
+    </Dialog>
   )
 }
 

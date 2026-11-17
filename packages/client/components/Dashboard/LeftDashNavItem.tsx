@@ -1,7 +1,6 @@
-import type {SvgIconTypeMap} from '@mui/material'
-import type {OverridableComponent} from '@mui/material/OverridableComponent'
-import {useRouteMatch} from 'react-router'
-import {Link} from 'react-router-dom'
+import {forwardRef, type ReactNode, type Ref} from 'react'
+import {Link, useMatch} from 'react-router'
+import type {IconComponent} from '~/ui/icons'
 import {cn} from '../../ui/cn'
 import {LeftNavItem} from '../DashNavList/LeftNavItem'
 
@@ -9,27 +8,36 @@ interface Props {
   onClick?: () => void
   label: string
   href: string
-  Icon: OverridableComponent<SvgIconTypeMap<{}, 'svg'>>
+  Icon: IconComponent
   exact?: boolean
+  decoration?: ReactNode
 }
 
-const LeftDashNavItem = (props: Props) => {
-  const {label, Icon, href, onClick, exact} = props
-  const match = useRouteMatch(href)
-  const isActive = !!match && (match?.isExact || !exact)
+const LeftDashNavItem = forwardRef((props: Props, ref: Ref<HTMLDivElement>) => {
+  const {label, Icon, href, onClick, exact, decoration} = props
+  const match = useMatch({path: href || '/', end: !!exact})
+  const isActive = href && !!match
+  const LinkWrapper = href ? Link : 'div'
   return (
-    <div className='relative rounded-md'>
+    <div className='relative rounded-md' ref={ref}>
       <div
         data-highlighted={isActive ? '' : undefined}
         className={cn(
-          'peer group relative my-0.5 flex w-full cursor-pointer items-center space-x-2 rounded-md px-1 py-1 text-slate-700 text-sm leading-8 outline-hidden',
-          'hover:bg-slate-300 focus:bg-slate-300 data-highlighted:bg-slate-300 data-highlighted:text-slate-900'
+          'peer group relative my-0.5 flex w-full cursor-pointer items-center space-x-2 rounded-md border-l-[3px] border-l-transparent px-1 py-1 text-fg-nav text-sm leading-8 outline-hidden before:absolute before:inset-y-1 before:left-px before:w-[3px] before:rounded-full before:bg-transparent',
+          'hover:bg-surface-nav-hover focus:bg-surface-nav-hover data-highlighted:bg-surface-nav-active data-highlighted:text-fg-primary data-highlighted:before:bg-(--color-accent-active)',
+          !!decoration && 'isolate'
         )}
       >
-        <Link draggable={false} to={href} className={'flex w-full items-center'} onClick={onClick}>
+        <LinkWrapper
+          draggable={false}
+          to={href}
+          className={'flex w-full items-center text-inherit hover:text-inherit'}
+          onClick={onClick}
+        >
+          {decoration}
           <div
             className={cn(
-              'flex size-6 shrink-0 items-center justify-center rounded-sm bg-inherit text-slate-600 group-data-highlighted:bg-slate-300'
+              'flex size-6 shrink-0 items-center justify-center rounded-sm bg-inherit text-fg-nav-muted group-data-highlighted:bg-surface-nav-active'
               // className
             )}
           >
@@ -38,10 +46,10 @@ const LeftDashNavItem = (props: Props) => {
           <LeftNavItem>
             <span className='pl-1'>{label}</span>
           </LeftNavItem>
-        </Link>
+        </LinkWrapper>
       </div>
     </div>
   )
-}
+})
 
 export default LeftDashNavItem

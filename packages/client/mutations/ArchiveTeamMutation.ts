@@ -3,9 +3,9 @@ import {commitMutation} from 'react-relay'
 import type {ArchiveTeamMutation as TArchiveTeamMutation} from '../__generated__/ArchiveTeamMutation.graphql'
 import type {ArchiveTeamMutation_team$data} from '../__generated__/ArchiveTeamMutation_team.graphql'
 import type {
-  HistoryLocalHandler,
+  NavigateLocalHandler,
   OnNextHandler,
-  OnNextHistoryContext,
+  OnNextNavigateContext,
   SharedUpdater,
   StandardMutation
 } from '../types/relayMutations'
@@ -13,7 +13,7 @@ import onMeetingRoute from '../utils/onMeetingRoute'
 import onTeamRoute from '../utils/onTeamRoute'
 import safeRemoveNodeFromArray from '../utils/relay/safeRemoveNodeFromArray'
 import handleAddNotifications from './handlers/handleAddNotifications'
-import handleRemoveReflectTemplate from './handlers/handleRemoveReflectTemplate'
+import handleRemovePromptTemplate from './handlers/handleRemovePromptTemplate'
 import handleRemoveSuggestedActions from './handlers/handleRemoveSuggestedActions'
 import SetNotificationStatusMutation from './SetNotificationStatusMutation'
 
@@ -52,9 +52,9 @@ const mutation = graphql`
   }
 `
 
-const popTeamArchivedToast: OnNextHandler<ArchiveTeamMutation_team$data, OnNextHistoryContext> = (
+const popTeamArchivedToast: OnNextHandler<ArchiveTeamMutation_team$data, OnNextNavigateContext> = (
   payload,
-  {history, atmosphere}
+  {navigate, atmosphere}
 ) => {
   if (!payload) return
   const {team, notification} = payload
@@ -88,7 +88,7 @@ const popTeamArchivedToast: OnNextHandler<ArchiveTeamMutation_team$data, OnNextH
     onTeamRoute(window.location.pathname, teamId) ||
     onMeetingRoute(window.location.pathname, meetingIds)
   ) {
-    history && history.push('/meetings')
+    navigate?.('/meetings')
   }
 }
 
@@ -111,15 +111,15 @@ export const archiveTeamTeamUpdater: SharedUpdater<ArchiveTeamMutation_team$data
 
 export const archiveTeamTeamOnNext: OnNextHandler<
   ArchiveTeamMutation_team$data,
-  OnNextHistoryContext
-> = (payload, {atmosphere, history}) => {
-  popTeamArchivedToast(payload, {atmosphere, history})
+  OnNextNavigateContext
+> = (payload, {atmosphere, navigate}) => {
+  popTeamArchivedToast(payload, {atmosphere, navigate})
 }
 
-const ArchiveTeamMutation: StandardMutation<TArchiveTeamMutation, HistoryLocalHandler> = (
+const ArchiveTeamMutation: StandardMutation<TArchiveTeamMutation, NavigateLocalHandler> = (
   atmosphere,
   variables,
-  {onError, onCompleted, history}
+  {onError, onCompleted, navigate}
 ) => {
   return commitMutation<TArchiveTeamMutation>(atmosphere, {
     mutation,
@@ -131,7 +131,7 @@ const ArchiveTeamMutation: StandardMutation<TArchiveTeamMutation, HistoryLocalHa
       const team = payload.getLinkedRecord('team')
       const teamId = team.getValue('id')
       teamTemplateIds?.forEach((templateId) => {
-        handleRemoveReflectTemplate(templateId, teamId, store)
+        handleRemovePromptTemplate(templateId, teamId, store)
       })
       archiveTeamTeamUpdater(payload, {atmosphere, store})
       const removedSuggestedActionIds = payload.getValue('removedSuggestedActionIds')
@@ -143,7 +143,7 @@ const ArchiveTeamMutation: StandardMutation<TArchiveTeamMutation, HistoryLocalHa
       }
       const payload = res.archiveTeam
       if (payload) {
-        popTeamArchivedToast(payload, {atmosphere, history})
+        popTeamArchivedToast(payload, {atmosphere, navigate})
       }
     },
     onError

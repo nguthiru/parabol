@@ -1,0 +1,208 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import type {SharingScopeEnum as ESharingScope} from '../../../database/types/MeetingTemplate'
+import PokerTemplate from '../../../database/types/PokerTemplate'
+import generateUID from '../../../generateUID'
+import getKysely from '../../../postgres/getKysely'
+import type {MeetingTypeEnum} from '../../../postgres/types/Meeting'
+import {getUserId, isTeamMember, isUserOrgAdmin} from '../../../utils/authorization'
+import publish from '../../../utils/publish'
+import type {MutationResolvers} from '../resolverTypes'
+import {isPromptTemplateType} from './helpers/promptTemplateRules'
+
+const updateTemplateScope: MutationResolvers['updateTemplateScope'] = async (
+  _source,
+  {templateId, scope: newScope},
+  context
+) => {
+  const {authToken, dataLoader, socketId: mutatorId} = context
+  const pg = getKysely()
+  const now = new Date()
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+  const viewerId = getUserId(authToken)
+  //AUTH
+  const template = await dataLoader.get('meetingTemplates').load(templateId)
+  if (!template || !template.isActive) {
+    throw new GraphQLError(`Template not found`, {extensions: {code: 'NOT_FOUND'}})
+  }
+  const {name, teamId, orgId, scope} = template
+  if (
+    !isTeamMember(authToken, teamId) &&
+    !(await isUserOrgAdmin(viewerId, template.orgId, dataLoader))
+  ) {
+    throw new GraphQLError('You are not authorized to update the scope of this template', {
+      extensions: {code: 'FORBIDDEN'}
+    })
+  }
+  if (context.resourceGrants) {
+    const [teamOk, orgOk] = await Promise.all([
+      context.resourceGrants.hasTeam(teamId),
+      context.resourceGrants.hasOrg(orgId)
+    ])
+    if (!teamOk && !orgOk) {
+      throw new GraphQLError('PAT does not grant access to this template', {
+        extensions: {code: 'FORBIDDEN'}
+      })
+    }
+  }
+
+  // VALIDATION
+  if (template.type === 'teamHealth') {
+    throw new GraphQLError('Team health templates are always shared across the organization', {
+      extensions: {code: 'BAD_USER_INPUT'}
+    })
+  }
+  if (scope === newScope) {
+    throw new GraphQLError('Template scope already set', {extensions: {code: 'CONFLICT'}})
+  }
+  const SCOPES: ESharingScope[] = ['TEAM', 'ORGANIZATION', 'PUBLIC']
+  const isDownscope = SCOPES.indexOf(newScope) < SCOPES.indexOf(scope)
+  if (isDownscope) {
+    const otherTeamSeries = await pg
+      .selectFrom('MeetingSeries')
+      .select('id')
+      .where('templateId', '=', templateId)
+      .where('teamId', '!=', teamId)
+      .where('cancelledAt', 'is', null)
+      .limit(1)
+      .executeTakeFirst()
+    if (otherTeamSeries) {
+      throw new GraphQLError("Another team's recurring meeting uses this template", {
+        extensions: {code: 'CONFLICT'}
+      })
+    }
+  }
+
+  // RESOLUTION
+  template.scope = newScope // mutate the cached record
+  const usedMeeting = isDownscope
+    ? await pg
+        .selectFrom('NewMeeting')
+        .select('id')
+        .where('templateId', '=', templateId)
+        .where('teamId', '!=', teamId)
+        .limit(1)
+        .executeTakeFirst()
+    : null
+  const shouldClone = !!usedMeeting
+  let clonedTemplateId: string | undefined
+
+  const clonePromptTemplate = async () => {
+    const pg = getKysely()
+    const clonedTemplate = {
+      id: generateUID(),
+      name,
+      teamId,
+      orgId,
+      type: template.type,
+      scope: newScope,
+      parentTemplateId: templateId,
+      lastUsedAt: template.lastUsedAt,
+      illustrationUrl: template.illustrationUrl,
+      mainCategory: template.mainCategory
+    }
+    clonedTemplateId = clonedTemplate.id
+    const activePrompts = await dataLoader.get('templatePromptsByTemplateId').load(templateId)
+    const promptIds = activePrompts.map(({id}) => id)
+    const clonedPrompts = activePrompts.map((prompt) => {
+      return {
+        id: generateUID(),
+        teamId: prompt.teamId,
+        templateId: clonedTemplateId!,
+        parentPromptId: prompt.id,
+        sortOrder: prompt.sortOrder,
+        question: prompt.question,
+        description: prompt.description,
+        groupColor: prompt.groupColor,
+        removedAt: null
+      }
+    })
+    await pg
+      .with('MeetingTemplateInsert', (qc) =>
+        qc.insertInto('MeetingTemplate').values(clonedTemplate)
+      )
+      .with('MeetingTemplateDeactivate', (qc) =>
+        qc.updateTable('MeetingTemplate').set({isActive: false}).where('id', '=', templateId)
+      )
+      .with('RemovePrompts', (qc) =>
+        qc.updateTable('TemplatePrompt').set({removedAt: now}).where('id', 'in', promptIds)
+      )
+      .with('RepointSeries', (qc) =>
+        qc
+          .updateTable('MeetingSeries')
+          .set({templateId: clonedTemplate.id})
+          .where('templateId', '=', templateId)
+          .where('teamId', '=', teamId)
+      )
+      .with('RepointSettings', (qc) =>
+        qc
+          .updateTable('MeetingSettings')
+          .set({selectedTemplateId: clonedTemplate.id})
+          .where('selectedTemplateId', '=', templateId)
+          .where('teamId', '=', teamId)
+      )
+      .insertInto('TemplatePrompt')
+      .values(clonedPrompts.map((p) => ({...p, sortOrder: String(p.sortOrder)})))
+      .execute()
+    dataLoader.clearAll(['templatePrompts', 'meetingTemplates', 'meetingSeries', 'meetingSettings'])
+  }
+
+  const clonePokerTemplate = async () => {
+    const clonedTemplate = new PokerTemplate({
+      name,
+      teamId,
+      orgId,
+      scope: newScope,
+      parentTemplateId: templateId,
+      lastUsedAt: template.lastUsedAt,
+      illustrationUrl: template.illustrationUrl,
+      mainCategory: template.mainCategory
+    })
+    clonedTemplateId = clonedTemplate.id
+    const activeDimensions = await dataLoader.get('templateDimensionsByTemplateId').load(templateId)
+    const dimensionIds = activeDimensions.map(({id}) => id)
+    const clonedDimensions = activeDimensions.map((dimension) => ({
+      ...dimension,
+      id: generateUID(),
+      templateId: clonedTemplateId!
+    }))
+
+    await getKysely()
+      .with('MeetingTemplateInsert', (qc) =>
+        qc.insertInto('MeetingTemplate').values(clonedTemplate)
+      )
+      .with('MeetingTemplateDeactivate', (qc) =>
+        qc.updateTable('MeetingTemplate').set({isActive: false}).where('id', '=', templateId)
+      )
+      .with('TemplateDimensionInsert', (qc) =>
+        qc.insertInto('TemplateDimension').values(clonedDimensions)
+      )
+      .updateTable('TemplateDimension')
+      .set({removedAt: now})
+      .where('id', 'in', dimensionIds)
+      .execute()
+    dataLoader.clearAll(['templateDimensions', 'meetingTemplates'])
+  }
+
+  if (shouldClone) {
+    if (isPromptTemplateType(template.type)) {
+      await clonePromptTemplate()
+    } else if (template.type === 'poker') {
+      await clonePokerTemplate()
+    }
+  } else {
+    await getKysely()
+      .updateTable('MeetingTemplate')
+      .set({scope: newScope})
+      .where('id', '=', templateId)
+      .execute()
+  }
+  const data = {templateId, teamId, clonedTemplateId, meetingType: template.type as MeetingTypeEnum}
+
+  // technically, this affects every connected client (public), or every team in the org (organization), but those are edge cases
+  publish(SubscriptionChannel.ORGANIZATION, orgId, 'UpdateTemplateScopeSuccess', data, subOptions)
+  return data
+}
+
+export default updateTemplateScope

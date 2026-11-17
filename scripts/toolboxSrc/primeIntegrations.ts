@@ -1,3 +1,4 @@
+import deactivateGlobalIntegrationProvider from '../../packages/server/postgres/queries/deactivateGlobalIntegrationProvider'
 import upsertIntegrationProvider from '../../packages/server/postgres/queries/upsertIntegrationProvider'
 import {Logger} from '../../packages/server/utils/Logger'
 
@@ -30,6 +31,14 @@ const upsertGlobalIntegrationProvidersFromEnv = async () => {
       clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET
     },
     {
+      service: 'gmeet',
+      authStrategy: 'oauth2',
+      scope: 'global',
+      serverBaseUrl: 'https://meet.googleapis.com/v2',
+      clientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET
+    },
+    {
       service: 'mattermost',
       authStrategy: 'sharedSecret',
       scope: 'global',
@@ -43,6 +52,38 @@ const upsertGlobalIntegrationProvidersFromEnv = async () => {
       serverBaseUrl: 'https://linear.app/',
       clientId: process.env.LINEAR_CLIENT_ID,
       clientSecret: process.env.LINEAR_CLIENT_SECRET
+    },
+    {
+      service: 'zoom',
+      authStrategy: 'oauth2',
+      scope: 'global',
+      serverBaseUrl: 'https://api.zoom.us/v2',
+      clientId: process.env.ZOOM_CLIENT_ID,
+      clientSecret: process.env.ZOOM_CLIENT_SECRET
+    },
+    {
+      service: 'jira',
+      authStrategy: 'oauth2',
+      scope: 'global',
+      serverBaseUrl: 'https://api.atlassian.com',
+      clientId: process.env.ATLASSIAN_CLIENT_ID,
+      clientSecret: process.env.ATLASSIAN_CLIENT_SECRET
+    },
+    {
+      service: 'github',
+      authStrategy: 'oauth2',
+      scope: 'global',
+      serverBaseUrl: 'https://api.github.com',
+      clientId: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET
+    },
+    {
+      service: 'clickup',
+      authStrategy: 'oauth2',
+      scope: 'global',
+      serverBaseUrl: 'https://api.clickup.com/api/v2',
+      clientId: process.env.CLICKUP_CLIENT_ID,
+      clientSecret: process.env.CLICKUP_CLIENT_SECRET
     }
   ] as const
 
@@ -52,17 +93,28 @@ const upsertGlobalIntegrationProvidersFromEnv = async () => {
       (authStrategy === 'sharedSecret' && sharedSecret && serverBaseUrl)
   )
 
-  await Promise.all(
-    validProviders.map((provider) => {
-      return upsertIntegrationProvider(provider)
+  const missingProviders = providers.filter((provider) => !validProviders.includes(provider))
+
+  await Promise.all([
+    ...validProviders.map((provider) => upsertIntegrationProvider(provider)),
+    ...missingProviders.map(({service, authStrategy}) => {
+      Logger.log(`⛓️ ${service} env vars missing, deactivating its global provider`)
+      return deactivateGlobalIntegrationProvider({service, authStrategy})
     })
-  )
+  ])
 }
 
 const primeIntegrations = async () => {
-  Logger.log('⛓️ Prime Integrationgs Started')
+  Logger.log('⛓️ Prime Integrations Started')
   await upsertGlobalIntegrationProvidersFromEnv()
   Logger.log('⛓️ Prime Integrations Complete')
+}
+
+// dev bundles this ahead of the Socket Server so global providers track .env on every boot.
+// it is an idempotent upsert; a failure (e.g. PG Migrations still running on a fresh DB)
+// must not take the server down with it
+if (require.main === module) {
+  primeIntegrations().catch((e) => Logger.error('⛓️ Prime Integrations Failed', e))
 }
 
 export default primeIntegrations

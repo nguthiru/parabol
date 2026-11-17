@@ -1,7 +1,8 @@
+"""
+A single team health question stage where participants vote on a label
+"""
 type TeamHealthStage implements NewMeetingStage {
-  """
-  stageId, shortid
-  """
+  "Unique identifier"
   id: ID!
 
   """
@@ -9,15 +10,13 @@ type TeamHealthStage implements NewMeetingStage {
   """
   endAt: DateTime
 
-  """
-  foreign key. try using meeting
-  """
+  "The ID of the meeting this stage belongs to"
   meetingId: ID!
 
   """
   The meeting this stage belongs to
   """
-  meeting: NewMeeting
+  meeting: NewMeeting!
 
   """
   true if the facilitator has completed this stage, else false. Should be boolean(endAt)
@@ -91,6 +90,11 @@ type TeamHealthStage implements NewMeetingStage {
   timeRemaining: Float
 
   """
+  The 0-based position of this stage within its phase, ordered by sortOrder.
+  """
+  stageIdx: Int!
+
+  """
   Team health question of the stage
   """
   question: String!
@@ -100,9 +104,7 @@ type TeamHealthStage implements NewMeetingStage {
   """
   labels: [String!]!
 
-  """
-  Viewer score
-  """
+  "The label the viewer voted for, if any"
   viewerVote: String
 
   """

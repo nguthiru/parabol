@@ -1,21 +1,33 @@
 import bcrypt from 'bcryptjs'
+import {GraphQLError} from 'graphql'
 import {AuthIdentityTypeEnum, Security} from 'parabol-client/types/constEnums'
 import AuthIdentityLocal from '../../../database/types/AuthIdentityLocal'
 import generateRandomString from '../../../generateRandomString'
 import getUsersByDomain from '../../../postgres/queries/getUsersByDomain'
+import {getUsersByEmails} from '../../../postgres/queries/getUsersByEmails'
+import normalizeDomain from '../../../utils/normalizeDomain'
+import normalizeEmail from '../../../utils/normalizeEmail'
+import isValid from '../../isValid'
 import processEmailPasswordReset from '../../mutations/helpers/processEmailPasswordReset'
 import type {MutationResolvers} from '../../private/resolverTypes'
 
 const removeAuthIdentity: MutationResolvers['removeAuthIdentity'] = async (
   _source,
-  {domain, identityType, addLocal, sendEmail = true},
-  {ip}
+  {domain, userIds, emails, identityType, addLocal, sendEmail = true},
+  {ip, dataLoader}
 ) => {
   // VALIDATION
-  const normalizedDomain = domain.toLowerCase().trim()
-  const users = await getUsersByDomain(normalizedDomain)
+  const [usersByDomain, usersById, usersByEmail] = await Promise.all([
+    domain && getUsersByDomain(normalizeDomain(domain)),
+    userIds && dataLoader.get('users').loadMany(userIds),
+    emails && getUsersByEmails(emails.map(normalizeEmail))
+  ])
+  const users = [...(usersByDomain || []), ...(usersById || []), ...(usersByEmail || [])].filter(
+    isValid
+  )
+
   if (!users.length) {
-    return {error: {message: 'No user emails match that domain'}}
+    throw new GraphQLError('No user emails match that domain', {extensions: {code: 'NOT_FOUND'}})
   }
 
   // RESOLUTION

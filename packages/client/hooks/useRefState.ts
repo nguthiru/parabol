@@ -5,7 +5,7 @@
  */
 import {
   type Dispatch,
-  type MutableRefObject,
+  type RefObject,
   type SetStateAction,
   useCallback,
   useRef,
@@ -14,11 +14,15 @@ import {
 
 const useRefState = <S>(
   initialState: S | (() => S)
-): [MutableRefObject<S>, Dispatch<SetStateAction<S>>] => {
+): [RefObject<S>, Dispatch<SetStateAction<S>>] => {
   const [firstState, _setState] = useState<S>(initialState)
   const latestState = useRef<S>(firstState)
-  const setState = useCallback((nextState) => {
-    latestState.current = nextState
+  const setState = useCallback((nextState: SetStateAction<S>) => {
+    const resolved =
+      typeof nextState === 'function'
+        ? (nextState as (prevState: S) => S)(latestState.current)
+        : nextState
+    latestState.current = resolved
     _setState(nextState)
   }, [])
   return [latestState, setState]

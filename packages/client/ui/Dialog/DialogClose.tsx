@@ -1,7 +1,7 @@
-import {Close} from '@mui/icons-material'
 import * as RadixDialog from '@radix-ui/react-dialog'
 import {forwardRef} from 'react'
-import {twMerge} from 'tailwind-merge'
+import {Close as CloseIcon} from '~/ui/icons'
+import {cn} from '../cn'
 
 export const DialogClose = forwardRef<
   HTMLButtonElement,
@@ -10,14 +10,14 @@ export const DialogClose = forwardRef<
   <RadixDialog.Close asChild>
     <button
       ref={ref}
-      className={twMerge(
+      className={cn(
         'absolute top-4 right-4 inline-flex h-6 w-6 cursor-pointer appearance-none items-center justify-center bg-transparent',
         className
       )}
       aria-label='Close'
       {...props}
     >
-      <Close className='text-slate-500 hover:opacity-50' />
+      <CloseIcon className='text-fg-muted hover:opacity-50' />
     </button>
   </RadixDialog.Close>
 ))

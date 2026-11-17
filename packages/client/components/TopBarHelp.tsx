@@ -1,8 +1,8 @@
-import {lazy} from 'react'
-import {MenuPosition} from '~/hooks/useCoords'
-import useMenu from '~/hooks/useMenu'
-import useModal from '~/hooks/useModal'
+import {lazy, Suspense, useState} from 'react'
 import lazyPreload from '~/utils/lazyPreload'
+import {Dialog} from '../ui/Dialog/Dialog'
+import {DialogContent} from '../ui/Dialog/DialogContent'
+import {Menu} from '../ui/Menu/Menu'
 import TopBarIcon from './TopBarIcon'
 
 const TopBarHelpMenu = lazyPreload(
@@ -18,23 +18,29 @@ const EditorHelpModal = lazy(
 )
 
 const TopBarHelp = () => {
-  const {togglePortal, originRef, menuPortal, menuProps} = useMenu<HTMLDivElement>(
-    MenuPosition.UPPER_RIGHT
-  )
-  const {togglePortal: toggleShortcuts, closePortal: closeShortcuts, modalPortal} = useModal()
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false)
   return (
     <>
-      <TopBarIcon
-        ref={originRef}
-        onClick={togglePortal}
-        onMouseEnter={TopBarHelpMenu.preload}
-        icon={'help_outline'}
-        ariaLabel={'Help menu'}
-      />
-      {menuPortal(
-        <TopBarHelpMenu dataCy='top-bar' menuProps={menuProps} toggleShortcuts={toggleShortcuts} />
-      )}
-      {modalPortal(<EditorHelpModal handleCloseModal={closeShortcuts} />)}
+      <Menu
+        trigger={
+          <TopBarIcon
+            onMouseEnter={TopBarHelpMenu.preload}
+            icon={'help_outline'}
+            ariaLabel={'Help menu'}
+          />
+        }
+      >
+        <Suspense fallback={null}>
+          <TopBarHelpMenu toggleShortcuts={() => setIsShortcutsOpen((v) => !v)} />
+        </Suspense>
+      </Menu>
+      <Dialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)}>
+        <DialogContent className='w-[564px] max-w-[95vw]' noClose hiddenTitle='Formatting Text'>
+          <Suspense fallback=''>
+            <EditorHelpModal handleCloseModal={() => setIsShortcutsOpen(false)} />
+          </Suspense>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

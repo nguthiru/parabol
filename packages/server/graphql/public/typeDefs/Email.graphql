@@ -1,1 +1,6 @@
+"""
+A valid email address string (e.g. "user@example.com").
+Inputs are trimmed, lowercased, and rejected unless they are a single plain address: no display names, quoted
+local parts, or list separators. Stored and compared case-insensitively; always serialized in lowercase.
+"""
 scalar Email

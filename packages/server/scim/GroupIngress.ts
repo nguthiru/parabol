@@ -1,0 +1,250 @@
+import SCIMMY from 'scimmy'
+import {MeetingSettingsThreshold} from '../../client/types/constEnums'
+import Team from '../database/types/Team'
+import generateUID from '../generateUID'
+import {DataLoaderWorker} from '../graphql/graphql'
+import isValid from '../graphql/isValid'
+import createTeamAndLeader from '../graphql/mutations/helpers/createTeamAndLeader'
+import removeTeamMembers from '../graphql/mutations/helpers/removeTeamMembers'
+import promptTemplateRules from '../graphql/public/mutations/helpers/promptTemplateRules'
+import type {SAMLSource} from '../graphql/public/types/SAML'
+import {USER_PREFERRED_NAME_LIMIT} from '../postgres/constants'
+import getKysely from '../postgres/getKysely'
+import acceptTeamInvitation from '../safeMutations/acceptTeamInvitation'
+import {Logger} from '../utils/Logger'
+import {getVisibleUserIds} from './getVisibleUserIds'
+import {logSCIMRequest} from './logSCIMRequest'
+import {mapGroupToSCIM} from './mapToSCIM'
+import {reservedUserIds} from './reservedIds'
+import {SCIMContext} from './SCIMContext'
+
+// Limits the whole member list, not the change: a PATCH reaches ingress merged with the group's
+// current members
+const MAX_GROUP_MEMBERS = 100
+
+const createEmptyTeam = async (team: Team) => {
+  const pg = getKysely()
+  const {id: teamId} = team
+
+  await pg
+    .with('TeamInsert', (qc) => qc.insertInto('Team').values(team))
+    .insertInto('MeetingSettings')
+    .values([
+      {
+        id: generateUID(),
+        teamId,
+        meetingType: 'retrospective',
+        phaseTypes: ['checkin', 'TEAM_HEALTH', 'updates', 'reflect', 'group', 'vote', 'discuss'],
+        disableAnonymity: false,
+        maxVotesPerGroup: MeetingSettingsThreshold.RETROSPECTIVE_MAX_VOTES_PER_GROUP_DEFAULT,
+        totalVotes: MeetingSettingsThreshold.RETROSPECTIVE_TOTAL_VOTES_DEFAULT,
+        selectedTemplateId: 'workingStuckTemplate'
+      },
+      {
+        id: generateUID(),
+        teamId,
+        meetingType: 'action',
+        phaseTypes: ['checkin', 'updates', 'firstcall', 'agendaitems', 'lastcall']
+      },
+      {
+        id: generateUID(),
+        teamId,
+        meetingType: 'poker',
+        phaseTypes: ['checkin', 'SCOPE', 'ESTIMATE'],
+        selectedTemplateId: 'estimatedEffortTemplate'
+      },
+      {
+        id: generateUID(),
+        teamId,
+        meetingType: 'teamPrompt',
+        phaseTypes: ['RESPONSES'],
+        selectedTemplateId: promptTemplateRules.teamPrompt.defaultTemplateId
+      }
+    ])
+    .execute()
+}
+
+const applyMembers = async (
+  group: SCIMMY.Schemas.Group,
+  saml: SAMLSource,
+  dataLoader: DataLoaderWorker
+) => {
+  const members = group.members || []
+
+  const [team, existingMembers] = await Promise.all([
+    dataLoader.get('teams').load(group.id),
+    dataLoader.get('teamMembersByTeamId').load(group.id)
+  ])
+  if (!team) {
+    throw new SCIMMY.Types.Error(404, '', 'Team not found')
+  }
+  const visibleUserIds = await getVisibleUserIds(
+    [...existingMembers.map(({userId}) => userId), ...members.map(({value}) => value)],
+    saml,
+    dataLoader
+  )
+  const toAdd = members.filter(
+    (member) =>
+      visibleUserIds.includes(member.value) &&
+      !existingMembers.some((m) => m.userId === member.value)
+  )
+  const toRemove = existingMembers.filter(
+    (m) => visibleUserIds.includes(m.userId) && !members.some((member) => member.value === m.userId)
+  )
+
+  if (existingMembers.length === 0 && toAdd.length > 0) {
+    // If there are no existing members, we need to add the first one as lead
+    // We also unarchive the team, because empty teams are always archived
+    const teamLead = toAdd.shift()!
+    await acceptTeamInvitation(team, teamLead.value, dataLoader, true)
+    const pg = getKysely()
+    await pg.updateTable('Team').set({isArchived: false}).where('id', '=', team.id).execute()
+  }
+
+  await Promise.all(
+    toAdd.map(async (member) => {
+      try {
+        await acceptTeamInvitation(team, member.value, dataLoader)
+      } catch (e) {
+        Logger.error(`Failed to add user ${member.value} to team ${group.id}: ${e}`)
+      }
+    })
+  )
+
+  // Add before removing, so replacing every member hands the lead to a new member instead of archiving the team
+  if (toRemove.length > 0) {
+    const userIdsToRemove = toRemove.map(({userId}) => userId)
+    const {removedUserIds} = await removeTeamMembers(group.id, userIdsToRemove, {}, dataLoader)
+    const notRemovedUserIds = userIdsToRemove.filter((userId) => !removedUserIds.includes(userId))
+    if (notRemovedUserIds.length > 0) {
+      Logger.error(`Failed to remove users ${notRemovedUserIds.join(', ')} from team ${group.id}`)
+    }
+  }
+
+  dataLoader.get('teamMembersByTeamId').clear(group.id)
+  return group
+}
+
+SCIMMY.Resources.declare(SCIMMY.Resources.Group).ingress(
+  async (resource, instance, context: SCIMContext) => {
+    const {ip, authToken, dataLoader} = context
+    const scimId = authToken.sub!
+
+    const {id: teamId} = resource
+
+    logSCIMRequest(scimId, ip, {operation: `Group ingress`, instance})
+    if (reservedUserIds.includes(teamId ?? '')) {
+      throw new SCIMMY.Types.Error(403, '', 'Forbidden')
+    }
+
+    const saml = await dataLoader.get('saml').loadNonNull(scimId)
+    const {orgId} = saml
+    if (!orgId) {
+      throw new SCIMMY.Types.Error(403, '', 'No organization associated with this SCIM')
+    }
+
+    const {displayName, members} = instance
+    if (displayName && displayName.length > USER_PREFERRED_NAME_LIMIT) {
+      throw new SCIMMY.Types.Error(400, 'invalidValue', 'displayName is too long')
+    }
+    // checked before any write, so a group that's too big isn't half created or renamed
+    if (members && members.length > MAX_GROUP_MEMBERS) {
+      throw new SCIMMY.Types.Error(
+        400,
+        'invalidValue',
+        `Too many members: a group can have at most ${MAX_GROUP_MEMBERS}`
+      )
+    }
+
+    const pg = getKysely()
+    const existingTeam = await pg
+      .selectFrom('Team')
+      .selectAll()
+      .where('orgId', '=', orgId)
+      .where('name', 'ilike', displayName ?? '')
+      .where((eb) => eb.or([eb('isArchived', '=', false), eb('scimCreated', '=', true)]))
+      .executeTakeFirst()
+
+    if (existingTeam && existingTeam.id !== teamId) {
+      throw new SCIMMY.Types.Error(409, 'uniqueness', 'Team with this name already exists')
+    }
+
+    if (teamId) {
+      // updating existing team
+
+      const team = await dataLoader.get('teams').load(teamId)
+      if (!team || team.orgId !== orgId) {
+        throw new SCIMMY.Types.Error(404, '', 'Group not found')
+      }
+
+      try {
+        const updatedTeam = await pg
+          .updateTable('Team')
+          .set({
+            name: displayName
+          })
+          .where('id', '=', teamId)
+          .returningAll()
+          .executeTakeFirst()
+        if (!updatedTeam) {
+          throw new SCIMMY.Types.Error(412, '', 'Team update failed')
+        }
+        await applyMembers({...instance, id: teamId}, saml, dataLoader)
+        return mapGroupToSCIM(updatedTeam, saml, dataLoader)
+      } catch (error) {
+        // the IdP shows its admin the message, which a 500 would hide
+        if (error instanceof SCIMMY.Types.Error) throw error
+        if (error instanceof Error && 'code' in error && error.code === '23505') {
+          throw new SCIMMY.Types.Error(409, 'uniqueness', 'Team exists')
+        }
+        Logger.error('Error updating team', {error})
+        throw new SCIMMY.Types.Error(500, '', 'Internal server error')
+      }
+    } else {
+      // new team
+      if (!displayName) {
+        throw new SCIMMY.Types.Error(400, 'invalidValue', 'displayName is required')
+      }
+      const visibleUserIds = await getVisibleUserIds(
+        members?.map((m) => m.value) ?? [],
+        saml,
+        dataLoader
+      )
+      const users = (await dataLoader.get('users').loadMany(visibleUserIds)).filter(isValid)
+
+      try {
+        const teamId = generateUID()
+        const validNewTeam = {
+          id: teamId,
+          orgId,
+          name: displayName,
+          isOnboardTeam: false,
+          isPublic: false,
+          scimCreated: true
+        }
+        const teamLead = users[0]
+        if (!teamLead) {
+          // We need a lead, but SCIM usually starts by provisioning empty groups
+          // Let's create an empty team for now. To not break any GraphQL assumptions about a lead always being present,
+          // we'll create it as archived and allow patching archived teams by id.
+          await createEmptyTeam(
+            new Team({
+              ...validNewTeam,
+              isArchived: true,
+              createdBy: null
+            })
+          )
+        } else {
+          await createTeamAndLeader(teamLead, validNewTeam, dataLoader)
+          await applyMembers({...instance, id: teamId}, saml, dataLoader)
+        }
+
+        return mapGroupToSCIM(validNewTeam, saml, dataLoader)
+      } catch (error) {
+        if (error instanceof SCIMMY.Types.Error) throw error
+        Logger.error('Failed to create team for SCIM group', {displayName, error})
+        throw new SCIMMY.Types.Error(500, '', 'Internal server error')
+      }
+    }
+  }
+)

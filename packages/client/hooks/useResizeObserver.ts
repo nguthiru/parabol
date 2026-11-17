@@ -1,5 +1,4 @@
 import {type RefObject, useEffect} from 'react'
-import ResizeObserverPolyfill from 'resize-observer-polyfill'
 import useEventCallback from './useEventCallback'
 
 declare global {
@@ -8,11 +7,11 @@ declare global {
   }
 }
 
-const ResizeObserver = window.ResizeObserver || (ResizeObserverPolyfill as {new (): ResizeObserver})
+const ResizeObserver = window.ResizeObserver
 
 const useResizeObserver = (
   cb: ResizeObserverCallback,
-  ref?: RefObject<HTMLDivElement | HTMLElement>
+  ref?: RefObject<HTMLDivElement | HTMLElement | null>
 ) => {
   const eventCb = useEventCallback((entries, observer) => {
     requestAnimationFrame(() => {

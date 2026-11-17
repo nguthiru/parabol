@@ -1,141 +1,77 @@
 import graphql from 'babel-plugin-relay/macro'
-import {useState} from 'react'
-import {useFragment} from 'react-relay'
-import type {GCalIntegrationPanel_meeting$key} from '../../../__generated__/GCalIntegrationPanel_meeting.graphql'
-import useAtmosphere from '../../../hooks/useAtmosphere'
-import useMutationProps from '../../../hooks/useMutationProps'
-import gcalSVG from '../../../styles/theme/images/graphics/google-calendar.svg'
-import {cn} from '../../../ui/cn'
-import GcalClientManager from '../../../utils/GcalClientManager'
-import SendClientSideEvent from '../../../utils/SendClientSideEvent'
+import ms from 'ms'
+import {usePreloadedQuery} from 'react-relay'
+import type {GCalIntegrationPanelQuery} from '../../../__generated__/GCalIntegrationPanelQuery.graphql'
+import useInspirationDrawer from '../../../hooks/useInspirationDrawer'
+import type {WorkDrawerQueryPanelProps} from '../../../integrations/platform/ClientIntegrationDefinition'
 import GCalIntegrationResultsRoot from './GCalIntegrationResultsRoot'
+import InspirationItemsPanel from './InspirationItemsPanel'
+import {WorkDrawerDateFilter} from './WorkDrawerDateFilter'
 
-const GCAL_QUERY_TABS = [
-  {
-    key: 'past7d',
-    label: 'Past 7 days'
-  },
-  {
-    key: 'today',
-    label: 'Today'
-  },
-  {
-    key: 'upcoming',
-    label: 'Upcoming'
-  }
-] as const
+const TODAY_MIDNIGHT = new Date().setHours(0, 0, 0, 0)
 
-interface Props {
-  meetingRef: GCalIntegrationPanel_meeting$key
-}
-
-const GCalPanel = (props: Props) => {
-  const {meetingRef} = props
-  const meeting = useFragment(
-    graphql`
-      fragment GCalIntegrationPanel_meeting on TeamPromptMeeting {
-        id
-        teamId
-        viewerMeetingMember {
-          teamMember {
-            teamId
-            integrations {
-              gcal {
-                auth {
-                  providerId
-                }
-                cloudProvider {
-                  id
-                  clientId
-                }
-              }
-            }
-          }
+const query = graphql`
+  query GCalIntegrationPanelQuery($meetingId: ID!) {
+    viewer {
+      meeting(meetingId: $meetingId) @required(action: THROW) {
+        ...useInspirationDrawer_meeting
+        gcalInspirationItems: inspirationItems(service: gcal) {
+          id
+          title
+          content
+          promptId
         }
       }
-    `,
-    meetingRef
+    }
+  }
+`
+
+const GCalIntegrationPanel = (props: WorkDrawerQueryPanelProps<GCalIntegrationPanelQuery>) => {
+  const {queryRef, meetingId, teamId} = props
+  const {viewer} = usePreloadedQuery<GCalIntegrationPanelQuery>(query, queryRef)
+  const {meeting} = viewer
+
+  const {dateRange, setDateRange, onResultCount, getResultCount} = useInspirationDrawer(
+    'gcal',
+    meeting
   )
 
-  const teamMember = meeting.viewerMeetingMember?.teamMember
+  // The events query requires a bounded window, so fall back to the past week when the filter is cleared.
+  const startDate = dateRange?.startAt ?? new Date(TODAY_MIDNIGHT - ms('7d')).toJSON()
+  const endDate = dateRange?.endAt ?? new Date(TODAY_MIDNIGHT + ms('1d')).toJSON()
+  // Show past-only ranges most-recent-first; show chronologically once the window reaches into the future.
+  const order = new Date(endDate).getTime() <= Date.now() ? 'DESC' : 'ASC'
+  const searchQuery = JSON.stringify({startDate, endDate})
 
-  const [eventRangeKey, setEventRangeKey] = useState<'past7d' | 'today' | 'upcoming'>('past7d')
-
-  const atmosphere = useAtmosphere()
-  const mutationProps = useMutationProps()
-  const {error, onError} = mutationProps
-
-  const gcal = teamMember?.integrations.gcal
-
-  const authGCal = () => {
-    if (!teamMember) {
-      return onError(new Error('Could not find team member'))
-    }
-    if (!gcal?.cloudProvider) {
-      return onError(new Error('Missing cloud provider for Google'))
-    }
-    const {clientId, id: providerId} = gcal.cloudProvider
-    GcalClientManager.openOAuth(atmosphere, providerId, clientId, teamMember.teamId, mutationProps)
-
-    SendClientSideEvent(atmosphere, 'Your Work Drawer Integration Connected', {
-      teamId: meeting.teamId,
-      meetingId: meeting.id,
-      service: 'gcal'
-    })
-  }
-
-  const trackTabNavigated = (label: string) => {
-    SendClientSideEvent(atmosphere, 'Your Work Drawer Tag Navigated', {
-      service: 'gcal',
-      buttonLabel: label
-    })
-  }
+  const filterBar = (
+    <div className='mb-2 flex w-full px-2'>
+      <WorkDrawerDateFilter dateRange={dateRange} setDateRange={setDateRange} />
+    </div>
+  )
 
   return (
     <>
-      {teamMember?.integrations.gcal?.auth?.providerId ? (
-        <>
-          <div className='mt-4 flex w-full gap-2 px-4'>
-            {GCAL_QUERY_TABS.map((tab) => (
-              <div
-                key={tab.key}
-                className={cn(
-                  'w-1/2 cursor-pointer rounded-full px-3 py-3 text-center text-slate-800 text-sm leading-3',
-                  tab.key === eventRangeKey
-                    ? 'bg-grape-700 font-semibold text-white focus:text-white'
-                    : 'border border-slate-300 bg-white'
-                )}
-                onClick={() => {
-                  trackTabNavigated(tab.label)
-                  setEventRangeKey(tab.key)
-                }}
-              >
-                {tab.label}
-              </div>
-            ))}
-          </div>
-          <GCalIntegrationResultsRoot teamId={teamMember.teamId} eventRangeKey={eventRangeKey} />
-        </>
-      ) : (
-        <div className='-mt-14 flex h-full flex-col items-center justify-center gap-2'>
-          <div className='h-10 w-10'>
-            <img className='h-10 w-10' src={gcalSVG} />
-          </div>
-          <b>Connect to Google Calendar</b>
-          <div className='w-1/2 text-center text-sm'>
-            Connect to Google Calendar to view your recent events.
-          </div>
-          <button
-            className='mt-4 cursor-pointer rounded-full bg-sky-500 px-8 py-2 font-semibold text-white hover:bg-sky-600'
-            onClick={authGCal}
-          >
-            Connect
-          </button>
-          {error && <div className='text-tomato-500'>{error.message}</div>}
-        </div>
-      )}
+      {filterBar}
+      <div className='flex min-h-0 flex-1 flex-col overflow-y-auto'>
+        <InspirationItemsPanel
+          meetingId={meetingId}
+          service='gcal'
+          searchQuery={searchQuery}
+          initialItems={meeting.gcalInspirationItems}
+          hideDraftPanel={!getResultCount(searchQuery)}
+        >
+          <GCalIntegrationResultsRoot
+            teamId={teamId}
+            startDate={startDate}
+            endDate={endDate}
+            order={order}
+            searchQuery={searchQuery}
+            onResultCount={onResultCount}
+          />
+        </InspirationItemsPanel>
+      </div>
     </>
   )
 }
 
-export default GCalPanel
+export default GCalIntegrationPanel

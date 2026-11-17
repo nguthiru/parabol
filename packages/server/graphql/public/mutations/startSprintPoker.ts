@@ -1,0 +1,166 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import toTeamMemberId from '../../../../client/utils/relay/toTeamMemberId'
+import MeetingPoker from '../../../database/types/MeetingPoker'
+import generateUID from '../../../generateUID'
+import {meetingsStarted} from '../../../metricsHandler'
+import getKysely from '../../../postgres/getKysely'
+import updateMeetingTemplateLastUsedAt from '../../../postgres/queries/updateMeetingTemplateLastUsedAt'
+import type {MeetingTypeEnum, PokerMeeting} from '../../../postgres/types/Meeting'
+import type {PokerMeetingPhase} from '../../../postgres/types/NewMeetingPhase'
+import {getUserId} from '../../../utils/authorization'
+import getHashAndJSON from '../../../utils/getHashAndJSON'
+import publish from '../../../utils/publish'
+import type {DataLoaderWorker} from '../../graphql'
+import isValid from '../../isValid'
+import createGcalEvent from '../../mutations/helpers/createGcalEvent'
+import createNewMeetingPhases from '../../mutations/helpers/createNewMeetingPhases'
+import insertNewMeeting from '../../mutations/helpers/insertNewMeeting'
+import isStartMeetingLocked from '../../mutations/helpers/isStartMeetingLocked'
+import {IntegrationNotifier} from '../../mutations/helpers/notifications/IntegrationNotifier'
+import type {MutationResolvers} from '../resolverTypes'
+import getNextFacilitatorUserId from './helpers/getNextFacilitatorUserId'
+import setFacilitatorRotation from './helpers/setFacilitatorRotation'
+import {createMeetingMember} from './joinMeeting'
+
+const freezeTemplateAsRef = async (templateId: string, dataLoader: DataLoaderWorker) => {
+  const pg = getKysely()
+  const [template, dimensions] = await Promise.all([
+    dataLoader.get('meetingTemplates').loadNonNull(templateId),
+    dataLoader.get('templateDimensionsByTemplateId').load(templateId)
+  ])
+  const activeDimensions = dimensions.filter(({removedAt}) => !removedAt)
+  const {name: templateName} = template
+  const uniqueScaleIds = Array.from(new Set(activeDimensions.map(({scaleId}) => scaleId)))
+  const uniqueScales = (await dataLoader.get('templateScales').loadMany(uniqueScaleIds)).filter(
+    isValid
+  )
+  const templateScales = uniqueScales.map(({name, values}) => {
+    const scale = {
+      name,
+      values: values.map(({color, label}) => ({color, label}))
+    }
+    const {id, str} = getHashAndJSON(scale)
+    return {id, scale: str}
+  })
+
+  const templateRef = {
+    name: templateName,
+    dimensions: activeDimensions.map((dimension) => {
+      const {name, scaleId} = dimension
+      const scaleIdx = uniqueScales.findIndex((scale) => scale.id === scaleId)
+      const templateScale = templateScales[scaleIdx]!
+      const {id: scaleRefId} = templateScale
+      return {
+        name,
+        scaleRefId
+      }
+    })
+  }
+  const {id: templateRefId, str: templateRefStr} = getHashAndJSON(templateRef)
+  const ref = {id: templateRefId, template: templateRefStr}
+  await pg
+    .with('TemplateScaleRefUpsert', (qc) =>
+      qc
+        .insertInto('TemplateScaleRef')
+        .values(templateScales)
+        .onConflict((oc) => oc.doNothing())
+    )
+    .insertInto('TemplateRef')
+    .values(ref)
+    .onConflict((oc) => oc.doNothing())
+    .execute()
+  return templateRefId
+}
+
+const startSprintPoker: MutationResolvers['startSprintPoker'] = async (
+  _source,
+  {teamId, name, gcalInput},
+  context
+) => {
+  const {authToken, socketId: mutatorId, dataLoader} = context
+  const pg = getKysely()
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+  const viewerId = getUserId(authToken)
+  const meetingType: MeetingTypeEnum = 'poker'
+  const [unpaidError, meetingCount, meetingSettings, {facilitatorUserId, rotation}, teamMember] =
+    await Promise.all([
+      isStartMeetingLocked(teamId, dataLoader),
+      dataLoader.get('meetingCount').load({teamId, meetingType}),
+      dataLoader.get('meetingSettingsByType').loadNonNull({teamId, meetingType}),
+      getNextFacilitatorUserId(teamId, viewerId, dataLoader),
+      dataLoader.get('teamMembers').loadNonNull(toTeamMemberId(teamId, viewerId))
+    ])
+  if (unpaidError) throw new GraphQLError(unpaidError, {extensions: {code: 'FORBIDDEN'}})
+  const {selectedTemplateId} = meetingSettings
+  if (!selectedTemplateId) {
+    throw new Error('selectedTemplateId is required')
+  }
+  if (!teamMember.isNotRemoved) {
+    throw new GraphQLError('Team member was removed', {extensions: {code: 'FORBIDDEN'}})
+  }
+
+  // RESOLUTION
+  const meetingId = generateUID()
+  const [[phases, inserts], templateRefId] = await Promise.all([
+    createNewMeetingPhases<PokerMeetingPhase>(
+      viewerId,
+      teamId,
+      meetingId,
+      meetingCount,
+      meetingType,
+      dataLoader
+    ),
+    freezeTemplateAsRef(selectedTemplateId, dataLoader)
+  ])
+
+  const meeting = new MeetingPoker({
+    id: meetingId,
+    teamId,
+    name: name ?? `Sprint Poker #${meetingCount + 1}`,
+    meetingCount,
+    phases,
+    facilitatorUserId,
+    templateId: selectedTemplateId,
+    templateRefId
+  }) as PokerMeeting
+
+  const [newMeetingRes] = await Promise.allSettled([
+    insertNewMeeting(meeting, inserts),
+    updateMeetingTemplateLastUsedAt(selectedTemplateId, teamId)
+  ])
+  if (newMeetingRes.status === 'rejected') {
+    throw new GraphQLError('Meeting already started', {extensions: {code: 'CONFLICT'}})
+  }
+  dataLoader.clearAll('newMeetings')
+  const meetingMember = createMeetingMember(meeting, teamMember)
+  await Promise.all([
+    pg
+      .with('MeetingMemberInsert', (qb) => qb.insertInto('MeetingMember').values(meetingMember))
+      .updateTable('Team')
+      .set({lastMeetingType: meetingType})
+      .where('id', '=', teamId)
+      .execute(),
+    rotation && setFacilitatorRotation(teamId, rotation, dataLoader)
+  ])
+  IntegrationNotifier.startMeeting(dataLoader, meetingId, teamId)
+  meetingsStarted.inc({meeting_type: meeting.meetingType})
+  const {error} = await createGcalEvent({
+    name: meeting.name,
+    gcalInput,
+    meetingId,
+    teamId,
+    viewerId,
+    dataLoader
+  })
+  const data = {
+    teamId,
+    meetingId,
+    hasGcalError: !!error?.message
+  }
+  publish(SubscriptionChannel.TEAM, teamId, 'StartSprintPokerSuccess', data, subOptions)
+  return data
+}
+
+export default startSprintPoker

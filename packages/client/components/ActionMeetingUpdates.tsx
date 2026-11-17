@@ -1,37 +1,14 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {useMemo} from 'react'
 import {useFragment} from 'react-relay'
 import type {ActionMeetingUpdates_meeting$key} from '../__generated__/ActionMeetingUpdates_meeting.graphql'
 import useAtmosphere from '../hooks/useAtmosphere'
-import isTaskPrivate from '../utils/isTaskPrivate'
+import getTeamMemberTasks from '../utils/getTeamMemberTasks'
+import getUpdatesEmptyState from '../utils/getUpdatesEmptyState'
 import toTeamMemberId from '../utils/relay/toTeamMemberId'
 import type {ActionMeetingPhaseProps} from './ActionMeeting'
 import ActionMeetingUpdatesPrompt from './ActionMeetingUpdatesPrompt'
-import MeetingContent from './MeetingContent'
-import MeetingHeaderAndPhase from './MeetingHeaderAndPhase'
-import MeetingPhaseWrapper from './MeetingPhaseWrapper'
-import MeetingTopBar from './MeetingTopBar'
-import PhaseWrapper from './PhaseWrapper'
-import StageTimerDisplay from './StageTimerDisplay'
-import PhaseCompleteTag from './Tag/PhaseCompleteTag'
-import TaskColumns from './TaskColumns/TaskColumns'
-
-const StyledColumnsWrapper = styled(MeetingPhaseWrapper)({
-  position: 'relative'
-})
-
-/* InnerColumnsWrapper is a patch fix to ensure correct
-   behavior for task columns overflow in small viewports TA */
-const InnerColumnsWrapper = styled('div')({
-  display: 'flex',
-  overflow: 'auto',
-  position: 'absolute',
-  top: 0,
-  right: 0,
-  bottom: 0,
-  left: 0
-})
+import MeetingUpdatesContent from './MeetingUpdatesContent'
 
 interface Props extends ActionMeetingPhaseProps {
   meeting: ActionMeetingUpdates_meeting$key
@@ -48,19 +25,12 @@ const ActionMeetingUpdates = (props: Props) => {
         id
         endedAt
         showSidebar
-        localPhase {
-          stages {
-            isComplete
-          }
-        }
         localStage {
-          ...ActionMeetingUpdatesStage @relay(mask: false)
+          ...ActionMeetingUpdatesStage @relay(mask: false) @alias
         }
         phases {
           stages {
-            ...ActionMeetingUpdatesStage @relay(mask: false)
-            # required so localPhase has access to isComplete
-            isComplete
+            ...ActionMeetingUpdatesStage @relay(mask: false) @alias
           }
         }
         team {
@@ -85,46 +55,36 @@ const ActionMeetingUpdates = (props: Props) => {
   )
   const atmosphere = useAtmosphere()
   const {viewerId} = atmosphere
-  const {id: meetingId, endedAt, localStage, showSidebar, team, localPhase} = meeting
+  const {id: meetingId, endedAt, localStage, showSidebar, team} = meeting
   const {id: teamId, tasks} = team
-  const {teamMember} = localStage!
-  const {userId} = teamMember!
-  const teamMemberTasks = useMemo(() => {
-    return tasks.edges
-      .map(({node}) => node)
-      .filter((task) => task.userId === userId && !isTaskPrivate(task.tags))
-  }, [tasks, userId])
-  const {stages} = localPhase
-  const isPhaseComplete = stages.every((stage) => stage.isComplete)
+  const stageOwner = localStage?.ActionMeetingUpdatesStage?.teamMember
+  const userId = stageOwner?.userId
+  const teamTasks = useMemo(() => tasks.edges.map(({node}) => node), [tasks])
+  const teamMemberTasks = useMemo(() => getTeamMemberTasks(teamTasks, userId), [teamTasks, userId])
+
+  if (!userId) return null
+  const isViewerStageOwner = userId === viewerId
+  const emptyState = getUpdatesEmptyState(
+    teamTasks,
+    teamMemberTasks.length,
+    stageOwner?.user.preferredName,
+    isViewerStageOwner
+  )
 
   return (
-    <MeetingContent>
-      <MeetingHeaderAndPhase hideBottomBar={!!endedAt}>
-        <MeetingTopBar
-          avatarGroup={avatarGroup}
-          isMeetingSidebarCollapsed={!showSidebar}
-          toggleSidebar={toggleSidebar}
-        >
-          <ActionMeetingUpdatesPrompt meeting={meeting} />
-        </MeetingTopBar>
-        <PhaseWrapper>
-          <PhaseCompleteTag isComplete={isPhaseComplete} />
-          <StageTimerDisplay meeting={meeting} />
-          <StyledColumnsWrapper>
-            <InnerColumnsWrapper>
-              <TaskColumns
-                area='meeting'
-                isViewerMeetingSection={userId === viewerId}
-                meetingId={meetingId}
-                myTeamMemberId={toTeamMemberId(teamId, viewerId)}
-                tasks={teamMemberTasks}
-                teams={null}
-              />
-            </InnerColumnsWrapper>
-          </StyledColumnsWrapper>
-        </PhaseWrapper>
-      </MeetingHeaderAndPhase>
-    </MeetingContent>
+    <MeetingUpdatesContent
+      avatarGroup={avatarGroup}
+      emptyState={emptyState}
+      endedAt={endedAt}
+      headerPrompt={<ActionMeetingUpdatesPrompt meeting={meeting} />}
+      isViewerStageOwner={isViewerStageOwner}
+      meetingId={meetingId}
+      meetingRef={meeting}
+      myTeamMemberId={toTeamMemberId(teamId, viewerId)}
+      showSidebar={showSidebar}
+      tasks={teamMemberTasks}
+      toggleSidebar={toggleSidebar}
+    />
   )
 }
 
@@ -132,6 +92,9 @@ graphql`
   fragment ActionMeetingUpdatesStage on UpdatesStage {
     teamMember {
       userId
+      user {
+        preferredName
+      }
     }
   }
 `

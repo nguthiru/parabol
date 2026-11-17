@@ -1,4 +1,0 @@
-type RenameReflectTemplatePromptPayload {
-  error: StandardMutationError
-  prompt: ReflectPrompt
-}

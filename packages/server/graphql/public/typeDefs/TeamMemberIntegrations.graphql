@@ -1,10 +1,8 @@
 """
-All the available integrations available for this team member
+All integration connections available for a team member
 """
 type TeamMemberIntegrations {
-  """
-  composite
-  """
+  "Composite ID (userId::teamId)"
   id: ID!
 
   """
@@ -31,6 +29,12 @@ type TeamMemberIntegrations {
   All things associated with a Linear integration for a team member
   """
   linear: LinearIntegration!
+
+  """
+  All things associated with a ClickUp integration for a team member
+  """
+  clickup: ClickUpIntegration!
+
   """
   All things associated with a Mattermost integration for a team member
   """
@@ -42,7 +46,7 @@ type TeamMemberIntegrations {
   slack: SlackIntegration
 
   """
-  All things associated with a A integration for a team member
+  All things associated with an Azure DevOps integration for a team member
   """
   azureDevOps: AzureDevOpsIntegration!
 
@@ -55,4 +59,14 @@ type TeamMemberIntegrations {
   All things associated with a Gcal integration for a team member
   """
   gcal: GcalIntegration
+
+  """
+  All things associated with a Google Meet (transcript import) integration for a team member
+  """
+  gmeet: GmeetIntegration!
+
+  """
+  All things associated with a Zoom integration for a team member
+  """
+  zoom: ZoomIntegration!
 }

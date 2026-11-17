@@ -1,16 +1,32 @@
 import {ReactNodeViewRenderer} from '@tiptap/react'
+import {isLoadableEmbedSrc} from '../fileBlock/isLoadableEmbedSrc'
 import {ImageBlockBase} from './ImageBlockBase'
 import {ImageBlockView} from './ImageBlockView'
 
+export interface ImageBlockAttrs {
+  src: string
+  height: number
+  width: number
+  align: 'left' | 'right' | 'center'
+  isFullWidth: boolean
+}
+const getImageSrc = (element: HTMLElement) => {
+  const src = element.getAttribute('src')
+  return src && !src.startsWith('data:') ? src : element.getAttribute('data-src')
+}
+
 export const ImageBlock = ImageBlockBase.extend({
+  parseHTML() {
+    return [{tag: 'img[src]:not([src^="data:"])'}, {tag: 'img[data-src]:not([src])'}]
+  },
   addAttributes() {
     return {
       src: {
         default: '',
-        parseHTML: (element) => element.getAttribute('src'),
-        renderHTML: (attributes) => ({
-          src: attributes.src
-        })
+        parseHTML: getImageSrc,
+        // tiptap renders this HTML into the page when it tears down the node views, so an unloaded src stays inert
+        renderHTML: ({src}) =>
+          typeof src === 'string' && isLoadableEmbedSrc(src) ? {src} : {'data-src': src}
       },
       height: {
         default: undefined,
@@ -39,6 +55,18 @@ export const ImageBlock = ImageBlockBase.extend({
         renderHTML: (attributes) => ({
           alt: attributes.alt
         })
+      },
+      isFullWidth: {
+        default: false,
+        parseHTML: (element) => element.getAttribute('data-full-width') === 'true',
+        renderHTML: (attributes) => {
+          if (!attributes.isFullWidth) {
+            return {}
+          }
+          return {
+            'data-full-width': attributes.isFullWidth
+          }
+        }
       }
     }
   },
@@ -47,19 +75,14 @@ export const ImageBlock = ImageBlockBase.extend({
       setImageBlock:
         (attrs) =>
         ({commands}) => {
-          return commands.insertContent({
+          const node = {
             type: 'imageBlock',
             attrs: {src: attrs.src}
-          })
-        },
-
-      setImageBlockAt:
-        (attrs) =>
-        ({commands}) => {
-          return commands.insertContentAt(attrs.pos, {
-            type: 'imageBlock',
-            attrs: {src: attrs.src}
-          })
+          }
+          if (attrs.pos) {
+            return commands.insertContentAt(attrs.pos, node)
+          }
+          return commands.insertContent(node)
         },
 
       setImageBlockAlign:
@@ -68,9 +91,14 @@ export const ImageBlock = ImageBlockBase.extend({
           commands.updateAttributes('imageBlock', {align}),
 
       setImageBlockWidth:
-        (width) =>
-        ({commands}) =>
-          commands.updateAttributes('imageBlock', {width})
+        (width: number) =>
+        ({commands}: {commands: any}) =>
+          commands.updateAttributes('imageBlock', {width, isFullWidth: false}),
+
+      setImageBlockFullWidth:
+        (isFullWidth: boolean) =>
+        ({commands}: {commands: any}) =>
+          commands.updateAttributes('imageBlock', {isFullWidth})
     }
   },
 

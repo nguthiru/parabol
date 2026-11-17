@@ -1,27 +1,30 @@
-import getKysely from 'parabol-server/postgres/getKysely'
-import type {EmbeddingsTable, EmbeddingsTableName} from '../ai_models/AbstractEmbeddingsModel'
+import getKysely from '../../server/postgres/getKysely'
+import {type ModelId, modelIdDefinitions} from '../ai_models/modelIdDefinitions'
 import type {JobQueueStepRun, ParentJob} from '../custom'
+import {getEmbeddingsTableName} from '../getEmbeddingsTableName'
 import type {rerankRetroTopics} from './rerankRetroTopics'
 
 export const getSimilarRetroTopics: JobQueueStepRun<
   {
     embeddingsMetadataId: number
-    model: EmbeddingsTableName
+    modelId: ModelId
   },
   ParentJob<typeof rerankRetroTopics>
 > = async (context) => {
   const {data, dataLoader} = context
-  const {embeddingsMetadataId} = data
-  const model = data.model as EmbeddingsTable
+  const {embeddingsMetadataId, modelId} = data
   const MAX_CANDIDATES = 10
-  const SIMILARITY_THRESHOLD = 0.67
+  const {relatedDiscussionFloor} = modelIdDefinitions[modelId]
   const pg = getKysely()
   const metadata = await dataLoader.get('embeddingsMetadata').loadNonNull(embeddingsMetadataId)
-  const {teamId} = metadata
+  const {teamId, refId: discussionId} = metadata
+  const discussion = await dataLoader.get('discussions').loadNonNull(discussionId)
+  const {meetingId} = discussion
+  const tableName = getEmbeddingsTableName(modelId)
   const similarEmbeddings = await pg
     .with('Vector', (qc) =>
       qc
-        .selectFrom(model)
+        .selectFrom(tableName)
         .select('embedding')
         .where('embeddingsMetadataId', '=', embeddingsMetadataId)
         .orderBy('chunkNumber')
@@ -30,12 +33,18 @@ export const getSimilarRetroTopics: JobQueueStepRun<
     )
     .with('Model', (qc) =>
       qc
-        .selectFrom(model)
-        .select([`${model}.id`, 'embeddingsMetadataId', 'embedding'])
-        .innerJoin('EmbeddingsMetadata', 'EmbeddingsMetadata.id', `${model}.embeddingsMetadataId`)
-        .where('teamId', '=', teamId)
+        .selectFrom(tableName)
+        .select([`${tableName}.id`, 'embeddingsMetadataId', 'embedding'])
+        .innerJoin(
+          'EmbeddingsMetadata',
+          'EmbeddingsMetadata.id',
+          `${tableName}.embeddingsMetadataId`
+        )
+        .innerJoin('Discussion', 'Discussion.id', 'EmbeddingsMetadata.refId')
+        .where('EmbeddingsMetadata.teamId', '=', teamId)
         .where('objectType', '=', 'retrospectiveDiscussionTopic')
         .where('embeddingsMetadataId', '!=', embeddingsMetadataId)
+        .where('Discussion.meetingId', '!=', meetingId)
     )
     .with('CosineSimilarity', (pg) =>
       pg
@@ -52,14 +61,14 @@ export const getSimilarRetroTopics: JobQueueStepRun<
     )
     .selectFrom('CosineSimilarity')
     .select(['embeddingId', 'similarity', 'embeddingsMetadataId'])
-    .where('similarity', '>=', SIMILARITY_THRESHOLD)
+    .where('similarity', '>=', relatedDiscussionFloor)
     .orderBy('similarity', 'desc')
     .limit(MAX_CANDIDATES)
     .execute()
   if (similarEmbeddings.length === 0) return false
   return {
     embeddingsMetadataId,
-    model,
+    modelId,
     similarEmbeddings
   }
 }

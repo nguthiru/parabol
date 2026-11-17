@@ -20,13 +20,13 @@ export const isAuthenticated = (authToken: any): authToken is AuthToken => {
   return typeof authToken?.sub === 'string'
 }
 
-export const isSuperUser = (authToken: AuthToken) => {
+export const isSuperUser = (authToken: AuthToken | null) => {
   const userId = getUserIdInternal(authToken)
-  return userId ? authToken.rol === 'su' : false
+  return userId ? authToken?.rol === 'su' : false
 }
 
-export const isTeamMember = (authToken: AuthToken, teamId: string) => {
-  const {tms} = authToken
+export const isTeamMember = (authToken: AuthToken | null, teamId: string) => {
+  const tms = authToken?.tms
   return Array.isArray(tms) && tms.includes(teamId)
 }
 

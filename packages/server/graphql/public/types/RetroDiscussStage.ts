@@ -1,5 +1,11 @@
 import ReflectionGroup from '../../../database/types/ReflectionGroup'
+import type {DiscussStage} from '../../../postgres/types/NewMeetingPhase'
 import type {RetroDiscussStageResolvers} from '../resolverTypes'
+
+export interface DiscussStageSource extends DiscussStage {
+  meetingId: string
+  teamId: string
+}
 
 // note: this is the GraphQL type, not source DB type
 const DUMMY_DISCUSSION = {
@@ -25,18 +31,18 @@ const RetroDiscussStage: RetroDiscussStageResolvers = {
   },
 
   reflectionGroup: async ({reflectionGroupId, meetingId}, _args, {dataLoader}) => {
-    if (!reflectionGroupId) {
-      const meeting = await dataLoader.get('newMeetings').loadNonNull(meetingId)
-      if (!('templateId' in meeting)) throw new Error('Meeting has no template')
-      const prompts = await dataLoader.get('reflectPromptsByTemplateId').load(meeting.templateId!)
-      return new ReflectionGroup({
-        id: `${meetingId}:dummyGroup`,
-        meetingId,
-        promptId: prompts[0]!.id,
-        title: 'Unknown'
-      })
-    }
-    return dataLoader.get('retroReflectionGroups').loadNonNull(reflectionGroupId)
+    const reflectionGroup = reflectionGroupId
+      ? await dataLoader.get('retroReflectionGroups').load(reflectionGroupId)
+      : undefined
+    if (reflectionGroup) return reflectionGroup
+    // some old meetings have stages whose reflection group no longer exists
+    const prompts = await dataLoader.get('templatePromptsByMeetingId').load(meetingId)
+    return new ReflectionGroup({
+      id: reflectionGroupId || `${meetingId}:dummyGroup`,
+      meetingId,
+      promptId: prompts[0]!.id,
+      title: 'Unknown'
+    })
   }
 }
 

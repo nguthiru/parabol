@@ -1,44 +1,29 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
+import {motion} from 'motion/react'
+import type {CSSProperties} from 'react'
 import {useFragment} from 'react-relay'
-import {TransitionStatus} from '~/hooks/useTransition'
 import type {AvatarListUser_user$key} from '../__generated__/AvatarListUser_user.graphql'
-import {MenuPosition} from '../hooks/useCoords'
-import useTooltip from '../hooks/useTooltip'
-import {BezierCurve} from '../types/constEnums'
 import {cn} from '../ui/cn'
+import {Tooltip} from '../ui/Tooltip/Tooltip'
+import {TooltipContent} from '../ui/Tooltip/TooltipContent'
+import {TooltipTrigger} from '../ui/Tooltip/TooltipTrigger'
 import Avatar from './Avatar/Avatar'
-
-const Wrapper = styled('div')<{offset: number; isColumn?: boolean}>(({offset, isColumn}) => ({
-  position: 'absolute',
-  transform: `translate${isColumn ? 'Y' : 'X'}(${offset}px)`,
-  transition: `all 300ms ${BezierCurve.DECELERATE}`
-}))
 
 interface Props {
   className?: string
   offset: number
   isColumn?: boolean
-  isAnimated: boolean
-  onTransitionEnd?: () => void
-  status?: TransitionStatus
   user: AvatarListUser_user$key
   onClick?: () => void
   borderColor?: string
 }
 
+interface WrapperStyle extends CSSProperties {
+  '--avatar-border-color': string
+}
+
 const AvatarListUser = (props: Props) => {
-  const {
-    className,
-    isColumn,
-    user: userRef,
-    onTransitionEnd,
-    status,
-    offset,
-    isAnimated,
-    onClick,
-    borderColor
-  } = props
+  const {className, isColumn, user: userRef, offset, onClick, borderColor} = props
   const user = useFragment(
     graphql`
       fragment AvatarListUser_user on User {
@@ -49,31 +34,30 @@ const AvatarListUser = (props: Props) => {
     userRef
   )
   const {picture, preferredName} = user
-  const {tooltipPortal, openTooltip, closeTooltip, originRef} = useTooltip<HTMLDivElement>(
-    MenuPosition.UPPER_CENTER
-  )
-  const isAnimating =
-    isAnimated && (status === TransitionStatus.EXITING || status === TransitionStatus.MOUNTED)
+  const wrapperStyle: WrapperStyle = {
+    position: 'absolute',
+    '--avatar-border-color': borderColor || 'var(--color-surface-card)'
+  }
 
   return (
-    <Wrapper
-      ref={originRef}
-      offset={offset}
-      isColumn={isColumn}
-      onClick={onClick}
-      onMouseOver={openTooltip}
-      onMouseLeave={closeTooltip}
-    >
-      <Avatar
-        className={cn(
-          `border-solid border-[${borderColor || '#fff'}] duration-300 ease-out ${isAnimating ? 'scale-0 opacity-0' : 'scale-100 opacity-100'}`,
-          className
-        )}
-        onTransitionEnd={onTransitionEnd}
-        picture={picture}
-      />
-      {tooltipPortal(preferredName)}
-    </Wrapper>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <motion.div
+          style={wrapperStyle}
+          initial={isColumn ? {y: offset, scale: 0, opacity: 0} : {x: offset, scale: 0, opacity: 0}}
+          animate={isColumn ? {y: offset, scale: 1, opacity: 1} : {x: offset, scale: 1, opacity: 1}}
+          exit={{scale: 0, opacity: 0, transition: {duration: 0.15, ease: 'easeOut'}}}
+          transition={{duration: 0.25, ease: 'easeIn'}}
+          onClick={onClick}
+        >
+          <Avatar
+            className={cn('border-(--avatar-border-color) border-2 border-solid', className)}
+            picture={picture}
+          />
+        </motion.div>
+      </TooltipTrigger>
+      <TooltipContent side='bottom'>{preferredName}</TooltipContent>
+    </Tooltip>
   )
 }
 

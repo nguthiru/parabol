@@ -36,10 +36,14 @@ export const useRenameMeeting = (
   validationSettings: ValidationSettings = defaultValidationErrors
 ) => {
   const atmosphere = useAtmosphere()
-  const {error, submitMutation, submitting, onCompleted, onError} = useMutationProps()
+  const {error, submitMutation, submitting, onCompleted, onError} = useMutationProps({
+    errorDisplay: 'inline'
+  })
 
   const handleSubmit = (name: string) => {
-    if (submitting || error) return
+    if (submitting) return
+    const {error} = validate(name)
+    if (error) return
     submitMutation()
     RenameMeetingMutation(atmosphere, {meetingId, name}, {onCompleted, onError})
   }
@@ -52,8 +56,10 @@ export const useRenameMeeting = (
       .max(validationSettings.maxLength.max, validationSettings.maxLength.errorText)
 
     if (res.error) {
-      onError(new Error(res.error))
-    } else if (error) {
+      if (error?.message !== res.error) {
+        onError(new Error(res.error))
+      }
+    } else {
       onCompleted()
     }
     return res

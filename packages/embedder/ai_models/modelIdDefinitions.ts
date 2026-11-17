@@ -1,0 +1,169 @@
+import type {EmbeddingModelParams} from './AbstractEmbeddingsModel'
+
+const embeddingLanguages = [
+  'af',
+  'am',
+  'ar',
+  'as',
+  'az',
+  'be',
+  'bg',
+  'bn',
+  'bo',
+  'bs',
+  'ca',
+  'cs',
+  'cy',
+  'da',
+  'de',
+  'el',
+  'en',
+  'es',
+  'et',
+  'eu',
+  'fa',
+  'fi',
+  'fo',
+  'fr',
+  'ga',
+  'gd',
+  'gl',
+  'gu',
+  'he',
+  'hi',
+  'hr',
+  'ht',
+  'hu',
+  'hy',
+  'id',
+  'is',
+  'it',
+  'ja',
+  'jv',
+  'ka',
+  'kk',
+  'km',
+  'kn',
+  'ko',
+  'lo',
+  'lt',
+  'lv',
+  'mk',
+  'ml',
+  'mn',
+  'mr',
+  'ms',
+  'mt',
+  'my',
+  'nb',
+  'ne',
+  'nl',
+  'nn',
+  'or',
+  'pa',
+  'pl',
+  'ps',
+  'pt',
+  'ro',
+  'ru',
+  'sd',
+  'si',
+  'sk',
+  'sl',
+  'sq',
+  'sr',
+  'su',
+  'sv',
+  'sw',
+  'ta',
+  'te',
+  'tg',
+  'th',
+  'tl',
+  'tr',
+  'tt',
+  'uk',
+  'ur',
+  'uz',
+  'vi',
+  'zh'
+] as const
+const legacySettings = {
+  chunker: 'markdown',
+  pageVectorFloor: 0.4,
+  pageAlpha: 0.01,
+  searchPrompt: '',
+  discussionText: 'narrated',
+  relatedDiscussionPrompt: null,
+  relatedDiscussionFloor: 0.67,
+  reflectionPrompt: '',
+  similarWordingThreshold: 0.81,
+  templateSearchFloor: 0.5,
+  templateSearchGap: 0.05
+} as const
+
+export const modelIdDefinitions = {
+  'BAAI/bge-large-en-v1.5': {
+    embeddingDimensions: 1024,
+    precision: 32,
+    tableSuffix: 'bge_l_en_1p5',
+    languages: ['en'],
+    ...legacySettings
+  },
+  'llmrails/ember-v1': {
+    embeddingDimensions: 1024,
+    precision: 32,
+    tableSuffix: 'ember_1',
+    languages: ['en'],
+    ...legacySettings
+  },
+  'Svenni551/Qwen3-Embedding-0.6B-ONNX-INT8': {
+    embeddingDimensions: 1024,
+    precision: 16,
+    // Actual max is 32768, but we half that because attention = seqlen**2, so RAM will go up 4x
+    // Also, since we're using this for embeddings, we want chunks to have more meaning. No soup.
+    tableSuffix: 'qwen3v2',
+    languages: embeddingLanguages,
+    ...legacySettings
+  },
+  // Our INT8 build of microsoft/harrier-oss-v1-270m, which is what TEI serves
+  'Parabol/harrier-oss-v1-270m-ONNX-INT8': {
+    embeddingDimensions: 640,
+    precision: 16,
+    tableSuffix: 'harrier270m',
+    languages: embeddingLanguages,
+    chunker: 'sections',
+    pageVectorFloor: 0.4,
+    pageAlpha: 0.005,
+    searchPrompt:
+      'Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ',
+    discussionText: 'plain',
+    relatedDiscussionPrompt:
+      'Instruct: Given a topic from a team retrospective, retrieve past topics about the same issue\nQuery: ',
+    relatedDiscussionFloor: 0.62,
+    reflectionPrompt:
+      'Instruct: Given a note from a team retrospective, retrieve notes that make the same point\nQuery: ',
+    similarWordingThreshold: 0.78,
+    templateSearchFloor: 0.35,
+    templateSearchGap: 0.05
+  },
+  'Qwen/Qwen3-Embedding-0.6B': {
+    embeddingDimensions: 1024,
+    precision: 16,
+    // Actual max is 32768, but we half that because attention = seqlen**2, so RAM will go up 4x
+    // Also, since we're using this for embeddings, we want chunks to have more meaning. No soup.
+    tableSuffix: 'qwen3_600M',
+    languages: embeddingLanguages,
+    ...legacySettings
+  }
+} satisfies Record<string, EmbeddingModelParams>
+
+export type ModelId = keyof typeof modelIdDefinitions
+
+// Ids a model went by before, mapped to its id now. An instance's AI_EMBEDDING_MODELS, and jobs queued before the
+// rename or by a server that hasn't restarted yet, may still use an old one.
+const formerModelIds: Record<string, ModelId> = {
+  'microsoft/harrier-oss-v1-270m': 'Parabol/harrier-oss-v1-270m-ONNX-INT8'
+}
+
+export const resolveModelId = (modelId: string) => (formerModelIds[modelId] ?? modelId) as ModelId

@@ -7,6 +7,7 @@ import type {AssetType, PartialPath} from './fileStorage/FileStoreManager'
 import getFileStoreManager from './fileStorage/getFileStoreManager'
 import type {AssetScopeEnum} from './graphql/public/resolverTypes'
 import uWSAsyncHandler from './graphql/uWSAsyncHandler'
+import {atlassianProxyHandler} from './integrations/jira/atlassianProxyHandler'
 import getKysely from './postgres/getKysely'
 import {getUserId, isTeamMember} from './utils/authorization'
 import {CipherId} from './utils/CipherId'
@@ -32,11 +33,11 @@ const servePlaceholderImage = async (res: HttpResponse) => {
     .end(placeholderBuffer)
 }
 
-const checkAccess = async (
-  authToken: AuthToken,
+export const checkAccess = async (
+  authToken: AuthToken | null,
   scope: AssetScopeEnum,
   scopeCode: string,
-  assetType: AssetType | 'idpMetadata.xml'
+  assetType: AssetType | 'idpMetadata' | 'idpMetadata.xml'
 ) => {
   const viewerId = getUserId(authToken)
   if (scope === 'User') {
@@ -54,7 +55,7 @@ const checkAccess = async (
       if (isTeamMember(authToken, scopeCode)) return true
     }
   } else if (scope === 'Organization') {
-    if (assetType === 'picture' || assetType === 'idpMetadata.xml') {
+    if (assetType === 'picture' || assetType === 'idpMetadata' || assetType === 'idpMetadata.xml') {
       // all org avatars and metadata are visible to all users
       return true
     } else {
@@ -73,7 +74,9 @@ const checkAccess = async (
   } else if (scope === 'Page') {
     const dataLoader = getNewDataLoader('imageProxyPage')
     const pageId = CipherId.decrypt(Number(scopeCode))
-    const pageAccess = await dataLoader.get('pageAccessByUserId').load({pageId, userId: viewerId})
+    const pageAccess = await dataLoader
+      .get('pageAccessByPageIdUserId')
+      .load({pageId, userId: viewerId})
     dataLoader.dispose()
     if (pageAccess) return true
   }
@@ -81,25 +84,33 @@ const checkAccess = async (
 }
 
 export const assetProxyHandler = uWSAsyncHandler(async (res: HttpResponse, req: HttpRequest) => {
-  const partialPath = decodeURIComponent(req.getUrl().slice('/assets'.length + 1))
-  if (!partialPath) {
+  // Parse the raw (non-decoded) path so an encoded Atlassian URL in the filename segment
+  // doesn't get its slashes expanded before we split on '/'.
+  const rawPath = req.getUrl().slice('/assets/'.length)
+  const segmentMatch = rawPath.match(/^([^/]+)\/([^/]+)\/([^/]+)(?:\/(.+))?$/)
+  if (!segmentMatch) {
     res.writeStatus('404').end()
     return
   }
+  const scope = segmentMatch[1] as AssetScopeEnum
+  const scopeCode = segmentMatch[2]!
+  const assetType = segmentMatch[3] as AssetType
+  const rawFilename = segmentMatch[4] ?? ''
+
   const authToken = getReqAuth(req)
-  const [scope, scopeCode, assetType, _filename] = partialPath.split('/') as [
-    AssetScopeEnum,
-    string,
-    AssetType,
-    string
-  ]
   const canAccess = await checkAccess(authToken, scope, scopeCode, assetType)
   if (!canAccess) {
     await servePlaceholderImage(res)
     return
   }
 
-  const manager = getFileStoreManager()
+  if (assetType === 'atlassian') {
+    await atlassianProxyHandler(res, authToken, scopeCode, rawFilename, servePlaceholderImage)
+    return
+  }
+
+  const partialPath = decodeURIComponent(rawPath)
+  const manager = await getFileStoreManager()
   const url = await redisStoreOrNetwork(
     `presignedURL:${partialPath}`,
     () => manager.presignUrl(partialPath as PartialPath),

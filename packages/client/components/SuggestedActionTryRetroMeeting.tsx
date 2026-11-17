@@ -1,17 +1,17 @@
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
-import {type RouteComponentProps, withRouter} from 'react-router'
+import {useNavigate} from 'react-router'
 import type {SuggestedActionTryRetroMeeting_suggestedAction$key} from '../__generated__/SuggestedActionTryRetroMeeting_suggestedAction.graphql'
-import {PALETTE} from '../styles/paletteV3'
 import SuggestedActionButton from './SuggestedActionButton'
 import SuggestedActionCard from './SuggestedActionCard'
 import SuggestedActionCopy from './SuggestedActionCopy'
 
-interface Props extends RouteComponentProps<{[x: string]: string | undefined}> {
+interface Props {
   suggestedAction: SuggestedActionTryRetroMeeting_suggestedAction$key
 }
 
 const SuggestedActionTryRetroMeeting = (props: Props) => {
+  const navigate = useNavigate()
   const {suggestedAction: suggestedActionRef} = props
   const suggestedAction = useFragment(
     graphql`
@@ -29,13 +29,12 @@ const SuggestedActionTryRetroMeeting = (props: Props) => {
   const {name: teamName} = team
 
   const onClick = () => {
-    const {history} = props
-    history.push(`/activity-library/category/retrospective`)
+    navigate(`/activity-library/category/retrospective`)
   }
 
   return (
     <SuggestedActionCard
-      backgroundColor={PALETTE.TOMATO_500}
+      backgroundColor='var(--color-tomato-500)'
       iconName='history'
       suggestedActionId={suggestedActionId}
     >
@@ -45,4 +44,4 @@ const SuggestedActionTryRetroMeeting = (props: Props) => {
   )
 }
 
-export default withRouter(SuggestedActionTryRetroMeeting)
+export default SuggestedActionTryRetroMeeting

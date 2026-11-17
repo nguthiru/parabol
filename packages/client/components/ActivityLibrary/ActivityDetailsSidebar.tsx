@@ -1,32 +1,39 @@
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
-import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp'
 import graphql from 'babel-plugin-relay/macro'
 import {useEffect, useRef, useState} from 'react'
 import {useFragment} from 'react-relay'
-import {useHistory} from 'react-router'
 import type {RRule} from 'rrule'
 import type {ActivityDetailsSidebar_teams$key} from '~/__generated__/ActivityDetailsSidebar_teams.graphql'
 import type {ActivityDetailsSidebar_template$key} from '~/__generated__/ActivityDetailsSidebar_template.graphql'
 import StartRetrospectiveMutation from '~/mutations/StartRetrospectiveMutation'
 import StartSprintPokerMutation from '~/mutations/StartSprintPokerMutation'
-import UpdateReflectTemplateScopeMutation from '~/mutations/UpdateReflectTemplateScopeMutation'
+import UpdateTemplateScopeMutation from '~/mutations/UpdateTemplateScopeMutation'
+import {
+  KeyboardArrowDown as KeyboardArrowDownIcon,
+  KeyboardArrowUp as KeyboardArrowUpIcon
+} from '~/ui/icons'
 import type {MeetingTypeEnum} from '../../__generated__/ActivityDetailsQuery.graphql'
 import type {CreateGcalEventInput} from '../../__generated__/StartRetrospectiveMutation.graphql'
 import useAtmosphere from '../../hooks/useAtmosphere'
 import useMutationProps from '../../hooks/useMutationProps'
+import useNavigateInTransition from '../../hooks/useNavigateInTransition'
 import SelectTemplateMutation from '../../mutations/SelectTemplateMutation'
 import StartCheckInMutation from '../../mutations/StartCheckInMutation'
 import StartTeamPromptMutation from '../../mutations/StartTeamPromptMutation'
+import type {CompletedHandler} from '../../types/relayMutations'
+import {Button} from '../../ui/Button/Button'
 import {cn} from '../../ui/cn'
+import {Spinner} from '../../ui/Spinner/Spinner'
+import GraphQLServerError from '../../utils/relay/GraphQLServerError'
 import sortByTier from '../../utils/sortByTier'
-import FlatPrimaryButton from '../FlatPrimaryButton'
 import NewMeetingActionsCurrentMeetings from '../NewMeetingActionsCurrentMeetings'
 import NewMeetingSettingsToggleAnonymity from '../NewMeetingSettingsToggleAnonymity'
 import NewMeetingSettingsToggleCheckIn from '../NewMeetingSettingsToggleCheckIn'
+import NewMeetingSettingsToggleReviewPastTasks from '../NewMeetingSettingsToggleReviewPastTasks'
 import NewMeetingSettingsToggleTeamHealth from '../NewMeetingSettingsToggleTeamHealth'
-import NewMeetingTeamPicker from '../NewMeetingTeamPicker'
+import StartMeetingUpgradeModal from '../StartMeetingUpgradeModal'
 import StyledError from '../StyledError'
 import StyledLink from '../StyledLink'
+import TeamPicker from '../TeamPicker/TeamPicker'
 import ScheduleMeetingButton from './ScheduleMeetingButton'
 
 interface Props {
@@ -36,9 +43,24 @@ interface Props {
   preferredTeamId: string | null | undefined
 }
 
+type UpgradeModalState = {
+  isHardBlock: boolean
+  teamCount: number
+  meetingCount: number
+}
+
+type PendingStartArgs = {
+  name?: string
+  rrule?: RRule
+  gcalInput?: CreateGcalEventInput
+}
+
 const ActivityDetailsSidebar = (props: Props) => {
   const {selectedTemplateRef, teamsRef, type, preferredTeamId} = props
   const [isMinimized, setIsMinimized] = useState(false)
+  const [upgradeModalState, setUpgradeModalState] = useState<UpgradeModalState | null>(null)
+  const pendingStartArgs = useRef<PendingStartArgs>({})
+
   const selectedTemplate = useFragment(
     graphql`
       fragment ActivityDetailsSidebar_template on MeetingTemplate {
@@ -61,19 +83,30 @@ const ActivityDetailsSidebar = (props: Props) => {
         tier
         orgId
         retroSettings: meetingSettings(meetingType: retrospective) {
+          ... on RetrospectiveMeetingSettings {
+            selectedTemplateId
+          }
           ...NewMeetingSettingsToggleCheckIn_settings
           ...NewMeetingSettingsToggleTeamHealth_settings
+          ...NewMeetingSettingsToggleReviewPastTasks_settings
           ...NewMeetingSettingsToggleAnonymity_settings
         }
         pokerSettings: meetingSettings(meetingType: poker) {
+          ... on PokerMeetingSettings {
+            selectedTemplateId
+          }
           ...NewMeetingSettingsToggleCheckIn_settings
+        }
+        teamPromptSettings: meetingSettings(meetingType: teamPrompt) {
+          ... on TeamPromptMeetingSettings {
+            selectedTemplateId
+          }
         }
         actionSettings: meetingSettings(meetingType: action) {
           ...NewMeetingSettingsToggleCheckIn_settings
         }
         ...NewMeetingSettingsToggleTeamHealth_team
-        ...NewMeetingTeamPicker_selectedTeam
-        ...NewMeetingTeamPicker_teams
+        ...TeamPicker_teams
         ...NewMeetingActionsCurrentMeetings_team
         ...ScheduleMeetingButton_team
         ...ScheduleDialog_team
@@ -111,80 +144,124 @@ const ActivityDetailsSidebar = (props: Props) => {
     const newTeam = currentAvailableTeams.find((team) => team.id === teamId)
     newTeam && setSelectedTeam(newTeam)
   }
-  const mutationProps = useMutationProps()
-  const {onError, onCompleted, submitting, submitMutation, error} = mutationProps
-  const history = useHistory()
+  const mutationProps = useMutationProps({errorDisplay: 'inline'})
+  const {onError, onCompleted, error} = mutationProps
+  // not mutationProps.submitting, since connecting Google Calendar in the schedule dialog submits too
+  const [isSubmittingStart, setIsSubmittingStart] = useState(false)
+  const [navigateToMeeting, isOpeningMeeting] = useNavigateInTransition()
+  const isStarting = isSubmittingStart || isOpeningMeeting
 
   // user has no teams
   if (!selectedTeam)
     return (
-      <div className='flex w-full flex-col items-center border-slate-300 border-t border-solid bg-white px-4 pt-2 lg:top-0 lg:right-0 lg:h-full lg:w-96 lg:flex-1 lg:border-l lg:pt-14'>
+      <div className='flex w-full flex-col items-center border-hairline border-t border-solid bg-surface-card px-4 pt-2 lg:top-0 lg:right-0 lg:h-full lg:w-96 lg:flex-1 lg:border-l lg:pt-14'>
         <div className='self-center italic'>You have no teams to start a meeting with!</div>
         <StyledLink to='/newteam'>Create a team</StyledLink>
       </div>
     )
 
-  const handleStartActivity = (name?: string, rrule?: RRule, gcalInput?: CreateGcalEventInput) => {
-    if (submitting) return
-    submitMutation()
-    if (type === 'teamPrompt') {
-      StartTeamPromptMutation(
-        atmosphere,
-        {
-          teamId: selectedTeam.id,
-          name,
-          rrule: rrule?.toString(),
-          gcalInput
-        },
-        {history, onError, onCompleted}
-      )
-    } else if (type === 'action') {
-      const variables = {
-        teamId: selectedTeam.id,
-        gcalInput
-      }
+  // selectedTeam is the team as it was when picked, so its settings come from the latest data
+  const teamSettings = teams.find(({id}) => id === selectedTeam.id) ?? selectedTeam
+  const teamTemplateIds: Partial<Record<MeetingTypeEnum, string | null | undefined>> = {
+    retrospective: teamSettings.retroSettings.selectedTemplateId,
+    poker: teamSettings.pokerSettings.selectedTemplateId,
+    teamPrompt: teamSettings.teamPromptSettings.selectedTemplateId
+  }
 
-      StartCheckInMutation(atmosphere, variables, {
-        history,
-        onError,
-        onCompleted
+  const tryShowUpgradeModal = (extensions: Record<string, unknown> | null | undefined) => {
+    const code = extensions?.code
+    if (code !== 'MAX_TEAM_UPGRADE_REQUIRED' && code !== 'MAX_TEAM_UPGRADE_SUGGESTED') return false
+    setUpgradeModalState({
+      isHardBlock: code === 'MAX_TEAM_UPGRADE_REQUIRED',
+      teamCount: (extensions?.teamCount as number) ?? 0,
+      meetingCount: (extensions?.meetingCount as number) ?? 0
+    })
+    return true
+  }
+
+  const makeUpgradeAwareOnCompleted =
+    (innerOnCompleted: CompletedHandler): CompletedHandler =>
+    (res, errors) => {
+      innerOnCompleted(res, errors)
+      errors?.find((e) => tryShowUpgradeModal(e.extensions))
+    }
+
+  const makeUpgradeAwareOnError =
+    (innerOnError: typeof onError): typeof onError =>
+    (error) => {
+      const serverErrors = error instanceof GraphQLServerError ? error.errors : []
+      if (serverErrors.some((e) => tryShowUpgradeModal(e.extensions))) return
+      innerOnError(error)
+    }
+
+  const startActivity = (
+    name?: string,
+    rrule?: RRule,
+    gcalInput?: CreateGcalEventInput,
+    ignoreSuggestedUpgrade?: boolean
+  ) => {
+    if (isStarting) return
+    setIsSubmittingStart(true)
+    const onStartError: typeof onError = (startError) => {
+      setIsSubmittingStart(false)
+      onError(startError)
+    }
+    const handlers = {
+      navigate: navigateToMeeting,
+      onError: makeUpgradeAwareOnError(onStartError),
+      onCompleted: makeUpgradeAwareOnCompleted((res, errors) => {
+        setIsSubmittingStart(false)
+        onCompleted(res, errors)
       })
+    }
+    const teamId = selectedTeam.id
+    const startWithSelectedTemplate = () => {
+      if (type === 'retrospective') {
+        StartRetrospectiveMutation(
+          atmosphere,
+          {teamId, name, rrule: rrule?.toString(), gcalInput, ignoreSuggestedUpgrade},
+          handlers
+        )
+      } else if (type === 'poker') {
+        StartSprintPokerMutation(atmosphere, {teamId, gcalInput, ignoreSuggestedUpgrade}, handlers)
+      } else if (type === 'teamPrompt') {
+        StartTeamPromptMutation(
+          atmosphere,
+          {teamId, name, rrule: rrule?.toString(), gcalInput, ignoreSuggestedUpgrade},
+          handlers
+        )
+      }
+    }
+    if (type === 'action') {
+      StartCheckInMutation(atmosphere, {teamId, gcalInput, ignoreSuggestedUpgrade}, handlers)
+    } else if (teamTemplateIds[type] === selectedTemplate.id) {
+      startWithSelectedTemplate()
     } else {
+      // a meeting starts with the template its team has selected
       SelectTemplateMutation(
         atmosphere,
-        {selectedTemplateId: selectedTemplate.id, teamId: selectedTeam.id},
-        {
-          onCompleted: () => {
-            if (type === 'retrospective') {
-              StartRetrospectiveMutation(
-                atmosphere,
-                {
-                  teamId: selectedTeam.id,
-                  name,
-                  rrule: rrule?.toString(),
-                  gcalInput
-                },
-                {history, onError, onCompleted}
-              )
-            } else if (type === 'poker') {
-              StartSprintPokerMutation(
-                atmosphere,
-                {teamId: selectedTeam.id, gcalInput},
-                {history, onError, onCompleted}
-              )
-            }
-          },
-          onError
-        }
+        {selectedTemplateId: selectedTemplate.id, teamId},
+        {onCompleted: startWithSelectedTemplate, onError: onStartError}
       )
     }
+  }
+
+  const handleStartActivity = (name?: string, rrule?: RRule, gcalInput?: CreateGcalEventInput) => {
+    pendingStartArgs.current = {name, rrule, gcalInput}
+    startActivity(name, rrule, gcalInput)
+  }
+
+  const handleStartAnyway = () => {
+    setUpgradeModalState(null)
+    const {name, rrule, gcalInput} = pendingStartArgs.current
+    startActivity(name, rrule, gcalInput, true)
   }
 
   const handleShareToOrg =
     templateTeam && selectedTemplate.scope === 'TEAM'
       ? () => {
           selectedTemplate &&
-            UpdateReflectTemplateScopeMutation(
+            UpdateTemplateScopeMutation(
               atmosphere,
               {scope: 'ORGANIZATION', templateId: selectedTemplate.id},
               {onError, onCompleted}
@@ -206,7 +283,7 @@ const ActivityDetailsSidebar = (props: Props) => {
 
   return (
     <>
-      <div className='sticky bottom-0 flex w-full flex-col border-slate-300 border-t border-solid bg-white px-4 pt-2 lg:top-0 lg:right-0 lg:h-full lg:w-96 lg:flex-1 lg:border-l lg:pt-14'>
+      <div className='sticky bottom-0 flex w-full flex-col border-hairline border-t border-solid bg-surface-card px-4 pt-2 lg:top-0 lg:right-0 lg:h-full lg:w-96 lg:flex-1 lg:border-l lg:pt-14'>
         <div className='grow'>
           <div className='flex items-center justify-between pt-2 font-semibold text-xl lg:pt-0'>
             Settings
@@ -227,9 +304,9 @@ const ActivityDetailsSidebar = (props: Props) => {
             )}
           >
             <div className='mt-6 flex grow flex-col gap-2'>
-              <NewMeetingTeamPicker
+              <TeamPicker
                 onSelectTeam={onSelectTeam}
-                selectedTeamRef={selectedTeam}
+                selectedTeamId={selectedTeam.id}
                 teamsRef={availableTeams}
                 onShareToOrg={handleShareToOrg}
               />
@@ -239,6 +316,9 @@ const ActivityDetailsSidebar = (props: Props) => {
                   <NewMeetingSettingsToggleTeamHealth
                     settingsRef={selectedTeam.retroSettings}
                     teamRef={selectedTeam}
+                  />
+                  <NewMeetingSettingsToggleReviewPastTasks
+                    settingsRef={selectedTeam.retroSettings}
                   />
                   <NewMeetingSettingsToggleAnonymity settingsRef={selectedTeam.retroSettings} />
                 </>
@@ -258,20 +338,34 @@ const ActivityDetailsSidebar = (props: Props) => {
           <NewMeetingActionsCurrentMeetings team={selectedTeam} />
           <ScheduleMeetingButton
             handleStartActivity={handleStartActivity}
-            mutationProps={mutationProps}
+            mutationProps={{...mutationProps, submitting: mutationProps.submitting || isStarting}}
             teamRef={selectedTeam}
             placeholder={meetingNamePlaceholder}
             withRecurrence={withRecurrence}
           />
-          <FlatPrimaryButton
+          <Button
+            variant='primary'
+            size='sm'
             onClick={() => handleStartActivity()}
-            waiting={submitting}
-            className='h-14'
+            disabled={isStarting}
+            className='h-14 gap-2 disabled:opacity-100'
           >
-            <div className='text-lg'>Start Activity</div>
-          </FlatPrimaryButton>
+            {isStarting && <Spinner className='h-5 w-5 text-white' />}
+            <div className='text-lg'>{isStarting ? 'Starting…' : 'Start Activity'}</div>
+          </Button>
         </div>
       </div>
+      {upgradeModalState && (
+        <StartMeetingUpgradeModal
+          isOpen={true}
+          isHardBlock={upgradeModalState.isHardBlock}
+          teamCount={upgradeModalState.teamCount}
+          meetingCount={upgradeModalState.meetingCount}
+          orgId={selectedTeam.orgId}
+          onClose={() => setUpgradeModalState(null)}
+          onStartAnyway={upgradeModalState.isHardBlock ? undefined : handleStartAnyway}
+        />
+      )}
     </>
   )
 }

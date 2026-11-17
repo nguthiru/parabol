@@ -1,0 +1,7 @@
+"""
+The authentication method used for SCIM provisioning
+"""
+enum SCIMAuthenticationTypeEnum {
+  oauthClientCredentials
+  bearerToken
+}

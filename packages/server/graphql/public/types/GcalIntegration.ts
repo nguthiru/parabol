@@ -1,5 +1,4 @@
-import {google} from 'googleapis'
-import appOrigin from '../../../appOrigin'
+import makeGcalCalendar from '../../../integrations/gcal/makeGcalCalendar'
 import type {GcalIntegrationResolvers} from '../resolverTypes'
 
 export type GcalIntegrationSource = {
@@ -9,7 +8,7 @@ export type GcalIntegrationSource = {
 
 const GcalIntegration: GcalIntegrationResolvers = {
   auth: ({teamId, userId}, _args, {dataLoader}) => {
-    return dataLoader.get('freshGcalAuth').load({teamId, userId})
+    return dataLoader.get('freshAuth').load({service: 'gcal', teamId, userId})
   },
   cloudProvider: async (_source, _args, {dataLoader}) => {
     const [globalProvider] = await dataLoader
@@ -19,24 +18,15 @@ const GcalIntegration: GcalIntegrationResolvers = {
     return globalProvider
   },
   events: async ({teamId, userId}, {startDate, endDate}, {dataLoader}) => {
-    const gcalAuth = await dataLoader.get('freshGcalAuth').load({teamId, userId})
+    const gcalAuth = await dataLoader.get('freshAuth').load({service: 'gcal', teamId, userId})
     if (!gcalAuth) {
       return []
     }
-    const {accessToken: access_token, refreshToken: refresh_token, expiresAt} = gcalAuth
-
-    const CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID
-    const CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET
-    const REDIRECT_URI = appOrigin
-
-    const expiry_date = expiresAt ? expiresAt.getTime() : undefined
-
-    const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI)
-    oauth2Client.setCredentials({access_token, refresh_token, expiry_date})
-    const calendar = google.calendar({version: 'v3', auth: oauth2Client})
+    const calendar = makeGcalCalendar(gcalAuth)
     const calendarEventResponse = await calendar.events.list({
       calendarId: 'primary',
-      maxAttendees: 1,
+      // Cap the attendee list per event so we can display a meeting-size count without huge payloads
+      maxAttendees: 100,
       maxResults: 100,
       orderBy: 'startTime',
       singleEvents: true,
@@ -53,11 +43,14 @@ const GcalIntegration: GcalIntegrationResolvers = {
     return events.map((rawEvent) => {
       const startDateString = rawEvent.start?.dateTime ?? rawEvent.start?.date
       const endDateString = rawEvent.end?.dateTime ?? rawEvent.end?.date
+      const attendeeCount = rawEvent.attendees?.length ?? 0
       return {
         summary: rawEvent.summary,
         startDate: startDateString ? new Date(startDateString) : undefined,
         endDate: endDateString ? new Date(endDateString) : undefined,
-        link: rawEvent.htmlLink
+        link: rawEvent.htmlLink,
+        location: rawEvent.location,
+        attendeeCount
       }
     })
   }

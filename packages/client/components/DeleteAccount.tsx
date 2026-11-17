@@ -1,37 +1,41 @@
-import styled from '@emotion/styled'
-import useModal from '../hooks/useModal'
-import {PALETTE} from '../styles/paletteV3'
-import lazyPreload from '../utils/lazyPreload'
+import graphql from 'babel-plugin-relay/macro'
+import {useState} from 'react'
+import {useFragment} from 'react-relay'
+import type {DeleteAccount_viewer$key} from '../__generated__/DeleteAccount_viewer.graphql'
+import {Button} from '../ui/Button/Button'
+import DeleteAccountModal from './DeleteAccountModal'
 import IconLabel from './IconLabel'
-import LinkButton from './LinkButton'
 
-const DeleteAccountModal = lazyPreload(
-  () => import(/* webpackChunkName: 'DeleteAccountModal' */ './DeleteAccountModal')
-)
+interface Props {
+  viewerRef: DeleteAccount_viewer$key
+}
 
-const Hint = styled('div')({
-  color: PALETTE.SLATE_600,
-  fontSize: 13,
-  marginTop: 8
-})
-
-const DeleteAccount = () => {
-  const {togglePortal, modalPortal} = useModal()
+const DeleteAccount = ({viewerRef}: Props) => {
+  const viewer = useFragment(
+    graphql`
+      fragment DeleteAccount_viewer on User {
+        ...DeleteAccountModal_viewer
+      }
+    `,
+    viewerRef
+  )
+  const [isOpen, setIsOpen] = useState(false)
   return (
     <>
       <div>
-        <LinkButton
+        <Button
           aria-label='Click to permanently delete your account.'
-          palette='red'
-          onClick={togglePortal}
+          size='default'
+          className='bg-transparent p-0 text-[14px] text-tomato-600 leading-5 shadow-none hover:text-tomato-800 focus:text-tomato-800 active:text-tomato-800'
+          onClick={() => setIsOpen(true)}
         >
           <IconLabel iconLarge icon='remove_circle' label='Delete Account' />
-        </LinkButton>
-        <Hint>
-          <b>Note</b>: {'This can’t be undone.'}
-        </Hint>
+        </Button>
+        <div className='mt-2 text-[13px] text-fg-secondary'>
+          <b>Note</b>: {"This can't be undone."}
+        </div>
       </div>
-      {modalPortal(<DeleteAccountModal />)}
+      <DeleteAccountModal isOpen={isOpen} onClose={() => setIsOpen(false)} viewerRef={viewer} />
     </>
   )
 }

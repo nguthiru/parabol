@@ -1,27 +1,43 @@
-import * as Y from 'yjs'
-import {Input} from '../../../ui/Input/Input'
+import {HocuspocusProvider} from '@hocuspocus/provider'
+import {Checkbox} from '../../../ui/Checkbox/Checkbox'
+import {cn} from '../../../ui/cn'
+import {cellClassName} from './cellClassName'
 import {ColumnId, RowId} from './data'
 import {useCell} from './hooks'
+import {useFocus} from './useFocus'
 
 export const CheckCell = ({
-  doc,
+  provider,
   rowId,
   columnId
 }: {
-  doc: Y.Doc
+  provider: HocuspocusProvider
   rowId: RowId
   columnId: ColumnId
 }) => {
+  const {document: doc} = provider
   const [rawValue, setRawValue] = useCell(doc, rowId, columnId)
+
   const checked = rawValue === 'true'
+  const toggleValue = () => {
+    setRawValue(checked ? 'false' : 'true')
+  }
+
+  const {focusProps} = useFocus({
+    provider,
+    key: `${columnId}:${rowId}`,
+    onStartEditing: () => {
+      toggleValue()
+    }
+  })
+
   return (
-    <Input
-      type='checkbox'
-      checked={checked}
-      className='mx-2.5 h-4.5 w-4.5 border-none'
-      onChange={(e) => {
-        setRawValue(e.target.checked ? 'true' : 'false')
-      }}
-    />
+    <div
+      {...focusProps}
+      className={cn(cellClassName, 'cursor-pointer justify-center')}
+      onClick={toggleValue}
+    >
+      <Checkbox checked={checked} />
+    </div>
   )
 }

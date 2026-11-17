@@ -6,8 +6,7 @@ interface Input {
 }
 export default class TeamHealthPhase extends GenericMeetingPhase {
   stages: [TeamHealthStage, ...TeamHealthStage[]]
-  phaseType!: 'TEAM_HEALTH'
-  isRevealed = false
+  phaseType = 'TEAM_HEALTH' as const
 
   constructor(input: Input) {
     super('TEAM_HEALTH')

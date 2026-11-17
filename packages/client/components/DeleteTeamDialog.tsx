@@ -1,15 +1,14 @@
 import {useState} from 'react'
+import {useNavigate} from 'react-router'
 import useAtmosphere from '../hooks/useAtmosphere'
 import useMutationProps from '../hooks/useMutationProps'
-import useRouter from '../hooks/useRouter'
 import ArchiveTeamMutation from '../mutations/ArchiveTeamMutation'
+import {Button} from '../ui/Button/Button'
 import {Dialog} from '../ui/Dialog/Dialog'
 import {DialogActions} from '../ui/Dialog/DialogActions'
 import {DialogContent} from '../ui/Dialog/DialogContent'
 import {DialogTitle} from '../ui/Dialog/DialogTitle'
 import {Input} from '../ui/Input/Input'
-import FlatPrimaryButton from './FlatPrimaryButton'
-import SecondaryButton from './SecondaryButton'
 
 interface Props {
   isOpen: boolean
@@ -22,19 +21,21 @@ interface Props {
 
 const DeleteTeamDialog = (props: Props) => {
   const atmosphere = useAtmosphere()
-  const {history} = useRouter()
+  const navigate = useNavigate()
   const {isOpen, onClose, teamId, teamName, teamOrgId, onDeleteTeam} = props
 
-  const {submitting, onCompleted, onError, error, submitMutation} = useMutationProps()
+  const {submitting, onCompleted, onError, error, submitMutation} = useMutationProps({
+    errorDisplay: 'inline'
+  })
 
   const [typedTeamName, setTypedTeamName] = useState(false)
 
   const handleDeleteTeam = () => {
     if (submitting) return
     submitMutation()
-    ArchiveTeamMutation(atmosphere, {teamId}, {history, onError, onCompleted})
+    ArchiveTeamMutation(atmosphere, {teamId}, {navigate, onError, onCompleted})
     onDeleteTeam(teamId)
-    history.push(`/me/organizations/${teamOrgId}/teams`)
+    navigate(`/me/organizations/${teamOrgId}/teams`)
   }
 
   const handleTypeTeamName = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -54,20 +55,20 @@ const DeleteTeamDialog = (props: Props) => {
         <DialogTitle className='mb-4'>Delete Team</DialogTitle>
 
         <fieldset className='mx-0 mb-6 flex w-full flex-col p-0'>
-          <label className='mb-3 text-left font-semibold text-slate-600 text-sm'>
+          <label className='mb-3 text-left font-semibold text-fg-secondary text-sm'>
             Please type your team name to confirm. <b>This action can't be undone.</b>
           </label>
           <Input autoFocus onChange={handleTypeTeamName} placeholder={teamName} />
-          {error && (
-            <div className='mt-2 font-semibold text-sm text-tomato-500'>{error.message}</div>
-          )}
+          {error && <div className='mt-2 font-semibold text-fg-error text-sm'>{error.message}</div>}
         </fieldset>
 
         <DialogActions>
-          <FlatPrimaryButton size='medium' onClick={handleDeleteTeam} disabled={!typedTeamName}>
+          <Button variant='outline' size='md' onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant='primary' size='md' onClick={handleDeleteTeam} disabled={!typedTeamName}>
             I understand the consequences, delete this team
-          </FlatPrimaryButton>
-          <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
+          </Button>
         </DialogActions>
       </DialogContent>
     </Dialog>

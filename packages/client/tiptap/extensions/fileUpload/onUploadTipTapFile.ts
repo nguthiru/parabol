@@ -1,0 +1,109 @@
+import type {Editor} from '@tiptap/core'
+import type {TierEnum} from '../../../__generated__/useTipTapPageEditor_viewer.graphql'
+import type Atmosphere from '../../../Atmosphere'
+import type {useUploadUserAsset} from '../../../mutations/useUploadUserAsset'
+import type {FileUploadTargetType} from '../../../shared/tiptap/extensions/FileUploadBase'
+import {checkFileMimeType} from '../../../shared/utils/checkFileMimeType'
+import {MAX_FILE_SIZE_FREE, MAX_FILE_SIZE_PAID, MAX_IMAGE_SIZE} from '../../../utils/constants'
+import jpgWithoutEXIF from '../../../utils/jpgWithoutEXIF'
+import getMutationError from '../../../utils/relay/getMutationError'
+
+export const fileUploadSettledMeta = 'fileUploadSettled'
+
+export const onUploadTipTapFile =
+  (
+    atmosphere: Atmosphere,
+    highestTier: TierEnum | null | undefined,
+    commit: ReturnType<typeof useUploadUserAsset>[0]
+  ) =>
+  async (file: File, editor: Editor, targetType: FileUploadTargetType, pos?: number) => {
+    if (!highestTier) return
+    const isFree = highestTier === 'starter'
+    const sizeLimit =
+      targetType === 'image' ? MAX_IMAGE_SIZE : isFree ? MAX_FILE_SIZE_FREE : MAX_FILE_SIZE_PAID
+    if (file.size > sizeLimit) {
+      const prefix = `The file is too large.`
+      const message = isFree
+        ? `Please upgrade for larger file uploads.`
+        : `Please reach out if you need to store files larger than ${MAX_FILE_SIZE_PAID / 1_000_000}MB.`
+      atmosphere.eventEmitter.emit('addSnackbar', {
+        key: 'fileTooBIG',
+        message: `${prefix} ${message}`,
+        autoDismiss: 5
+      })
+      return
+    }
+    if (file.type === 'image/jpeg') {
+      file = (await jpgWithoutEXIF(file)) as File
+    }
+    const bytes = await file.bytes()
+    if (file.type !== '') {
+      const mimeError = checkFileMimeType(bytes, file.type)
+      if (mimeError) {
+        atmosphere.eventEmitter.emit('addSnackbar', {
+          key: 'fileNotImage',
+          message: mimeError,
+          autoDismiss: 5
+        })
+        return
+      }
+    }
+    const fileType = file.type ?? ''
+    const nodeType = targetType === 'file' ? 'fileBlock' : 'imageBlock'
+    const localSrc = URL.createObjectURL(file)
+    const {scopeKey, assetScope} = editor.extensionStorage.fileUpload
+    if (targetType === 'file') {
+      editor.commands.setFileBlock({src: localSrc, name: file.name, size: file.size, fileType, pos})
+    } else if (targetType === 'image') {
+      editor.commands.setImageBlock({src: localSrc, pos})
+    } else {
+      console.error('Unknown target type', targetType)
+    }
+    return new Promise<void>((resolve) => {
+      const failUpload = (message: string) => {
+        atmosphere.eventEmitter.emit('addSnackbar', {
+          key: 'errorUploadUserAsset',
+          message,
+          autoDismiss: 5
+        })
+        const {state, view} = editor
+        state.doc.descendants((node, pos) => {
+          if (node.type.name === nodeType && node.attrs.src === localSrc) {
+            const tr = state.tr
+              .deleteRange(pos, pos + node.nodeSize)
+              .setMeta(fileUploadSettledMeta, true)
+            view.dispatch(tr)
+            return false
+          }
+          return true
+        })
+        resolve()
+      }
+      commit({
+        variables: {scope: assetScope, scopeKey},
+        uploadables: {file: file},
+        onError: (error) => failUpload(getMutationError(error).message),
+        onCompleted: (res, errors) => {
+          const {uploadUserAsset} = res
+          const message = uploadUserAsset?.error?.message ?? errors?.[0]?.message
+          if (message) {
+            failUpload(message)
+            return
+          }
+          const {state, view} = editor
+          const src = uploadUserAsset!.url!
+          state.doc.descendants((node, pos) => {
+            if (node.type.name === nodeType && node.attrs.src === localSrc) {
+              const tr = state.tr
+                .setNodeAttribute(pos, 'src', src)
+                .setMeta(fileUploadSettledMeta, true)
+              view.dispatch(tr)
+              return false
+            }
+            return true
+          })
+          resolve()
+        }
+      })
+    })
+  }

@@ -1,5 +1,6 @@
+import {GraphQLError} from 'graphql'
 import getKysely from '../../../postgres/getKysely'
-import {getUserId} from '../../../utils/authorization'
+import {getUserId, isTeamMember} from '../../../utils/authorization'
 import type {MutationResolvers} from '../resolverTypes'
 
 const toggleFavoriteTemplate: MutationResolvers['toggleFavoriteTemplate'] = async (
@@ -9,29 +10,40 @@ const toggleFavoriteTemplate: MutationResolvers['toggleFavoriteTemplate'] = asyn
 ) => {
   const viewerId = getUserId(authToken)
   const pg = getKysely()
-  const userId = getUserId(authToken)
 
   const favoriteTemplateIds = await dataLoader.get('favoriteTemplateIds').load(viewerId)
-
-  let updatedFavoriteTemplateIds
-
   const isCurrentlyFavorite = favoriteTemplateIds.includes(templateId)
 
-  if (isCurrentlyFavorite) {
-    updatedFavoriteTemplateIds = favoriteTemplateIds.filter((id) => id !== templateId)
-  } else {
-    updatedFavoriteTemplateIds = [...favoriteTemplateIds, templateId]
+  if (!isCurrentlyFavorite) {
+    const template = await dataLoader.get('meetingTemplates').load(templateId)
+    if (!template || !template.isActive) {
+      throw new GraphQLError('Template not found', {extensions: {code: 'NOT_FOUND'}})
+    }
+    const {scope} = template
+    if (scope === 'TEAM') {
+      if (!isTeamMember(authToken, template.teamId)) {
+        throw new GraphQLError('Template is not accessible', {extensions: {code: 'FORBIDDEN'}})
+      }
+    } else if (scope === 'ORGANIZATION') {
+      const viewerTeams = await dataLoader.get('teamsByOrgIds').load(template.orgId)
+      const viewerInOrg = viewerTeams.some((t) => authToken.tms.includes(t.id))
+      if (!viewerInOrg) {
+        throw new GraphQLError('Template is not accessible', {extensions: {code: 'FORBIDDEN'}})
+      }
+    }
   }
+
+  const updatedFavoriteTemplateIds = isCurrentlyFavorite
+    ? favoriteTemplateIds.filter((id) => id !== templateId)
+    : [...favoriteTemplateIds, templateId]
 
   await pg
     .updateTable('User')
-    .set({
-      favoriteTemplateIds: updatedFavoriteTemplateIds
-    })
-    .where('id', '=', userId)
+    .set({favoriteTemplateIds: updatedFavoriteTemplateIds})
+    .where('id', '=', viewerId)
     .execute()
 
-  return true
+  return {userId: viewerId}
 }
 
 export default toggleFavoriteTemplate

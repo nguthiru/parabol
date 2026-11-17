@@ -1,20 +1,11 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
+import {AnimatePresence} from 'motion/react'
 import {useFragment} from 'react-relay'
 import type {ReactjiSection_reactjis$key} from '~/__generated__/ReactjiSection_reactjis.graphql'
-import useInitialRender from '~/hooks/useInitialRender'
-import useTransition, {TransitionStatus} from '~/hooks/useTransition'
 import {Threshold} from '~/types/constEnums'
+import {cn} from '~/ui/cn'
 import AddReactjiButton from './AddReactjiButton'
-import ReactjiCount from './ReactjiCount'
-
-const Wrapper = styled('div')({
-  alignItems: 'flex-start',
-  display: 'flex',
-  flexWrap: 'wrap',
-  justifyItems: 'center',
-  justifyContent: 'start'
-})
+import ReactjiCountWrapper from './ReactjiCountWrapper'
 
 interface Props {
   className?: string
@@ -35,29 +26,16 @@ const ReactjiSection = (props: Props) => {
     `,
     reactjisRef
   )
-  const animatedReactjis = reactjis.map((reactji) => ({
-    ...reactji,
-    key: reactji.id
-  }))
-  const tranChildren = useTransition(animatedReactjis)
-  const isInit = useInitialRender()
+
   return (
-    <Wrapper className={className}>
-      {tranChildren.map((transReactji) => {
-        return (
-          <ReactjiCount
-            key={transReactji.child.key}
-            reactjiRef={transReactji.child}
-            onTransitionEnd={transReactji.onTransitionEnd}
-            status={isInit ? TransitionStatus.ENTERED : transReactji.status}
-            onToggle={onToggle}
-          />
-        )
-      })}
-      {tranChildren.length <= Threshold.MAX_REACTJIS - 1 && (
-        <AddReactjiButton onToggle={onToggle} />
-      )}
-    </Wrapper>
+    <div className={cn('flex flex-wrap items-start justify-start', className)}>
+      <AnimatePresence initial={false}>
+        {reactjis.map((reactji) => (
+          <ReactjiCountWrapper key={reactji.id} reactjiRef={reactji} onToggle={onToggle} />
+        ))}
+      </AnimatePresence>
+      {reactjis.length <= Threshold.MAX_REACTJIS - 1 && <AddReactjiButton onToggle={onToggle} />}
+    </div>
   )
 }
 

@@ -1,26 +1,14 @@
-import styled from '@emotion/styled'
-import {Edit} from '@mui/icons-material'
-import FlatButton from '~/components/FlatButton'
+import {useState} from 'react'
 import useAtmosphere from '~/hooks/useAtmosphere'
 import useHotkey from '~/hooks/useHotkey'
-import useModal from '~/hooks/useModal'
 import ResetRetroMeetingToGroupStageMutation from '~/mutations/ResetRetroMeetingToGroupStageMutation'
+import {Edit} from '~/ui/icons'
 import lazyPreload from '~/utils/lazyPreload'
+import {Button} from '../ui/Button/Button'
 
 interface Props {
   meetingId: string
 }
-
-const StyledButton = styled(FlatButton)({
-  fontWeight: 600,
-  height: 28,
-  marginLeft: 16,
-  padding: 0
-})
-
-const StyledIcon = styled(Edit)({
-  marginRight: 4
-})
 
 const UndoableGroupPhaseDialog = lazyPreload(
   () => import(/* webpackChunkName: 'UndoableGroupPhaseDialog' */ './UndoableGroupPhaseDialog')
@@ -28,7 +16,7 @@ const UndoableGroupPhaseDialog = lazyPreload(
 
 const UndoableGroupPhaseControl = (props: Props) => {
   const {meetingId} = props
-  const {togglePortal: toggleModal, closePortal: closeModal, modalPortal} = useModal()
+  const [isOpen, setIsOpen] = useState(false)
   const atmosphere = useAtmosphere()
   useHotkey('i d i d n t m e a n t o', () => {
     console.log('didntmean')
@@ -36,11 +24,19 @@ const UndoableGroupPhaseControl = (props: Props) => {
   })
   return (
     <>
-      <StyledButton onClick={toggleModal} palette={'blue'}>
-        <StyledIcon />
-        {' Edit Groups'}
-      </StyledButton>
-      {modalPortal(<UndoableGroupPhaseDialog closePortal={closeModal} meetingId={meetingId} />)}
+      <Button
+        variant='flat'
+        onClick={() => setIsOpen(true)}
+        className='ml-4 h-7 gap-1 px-2 font-semibold text-sky-500 text-sm'
+      >
+        <Edit className='size-5' />
+        Edit Groups
+      </Button>
+      <UndoableGroupPhaseDialog
+        isOpen={isOpen}
+        closePortal={() => setIsOpen(false)}
+        meetingId={meetingId}
+      />
     </>
   )
 }

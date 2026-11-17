@@ -1,22 +1,22 @@
 import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import type {AcceptTeamInvitationMutation_notification$data} from '~/__generated__/AcceptTeamInvitationMutation_notification.graphql'
-import {InvitationTokenError, LOCKED_MESSAGE} from '~/types/constEnums'
 import type {AcceptTeamInvitationMutation as TAcceptTeamInvitationMutation} from '../__generated__/AcceptTeamInvitationMutation.graphql'
 import type {AcceptTeamInvitationMutation_team$data} from '../__generated__/AcceptTeamInvitationMutation_team.graphql'
 import type Atmosphere from '../Atmosphere'
 import type {
-  HistoryMaybeLocalHandler,
+  NavigateMaybeLocalHandler,
   OnNextHandler,
   SharedUpdater,
   StandardMutation
 } from '../types/relayMutations'
 import fromTeamMemberId from '../utils/relay/fromTeamMemberId'
-import getGraphQLError from '../utils/relay/getGraphQLError'
+import getMutationError from '../utils/relay/getMutationError'
 import handleAddOrganization from './handlers/handleAddOrganization'
 import handleAddTeamMembers from './handlers/handleAddTeamMembers'
 import handleAddTeams from './handlers/handleAddTeams'
 import handleAuthenticationRedirect from './handlers/handleAuthenticationRedirect'
+import {snackOnError} from './handlers/snackOnError'
 
 graphql`
   fragment AcceptTeamInvitationMutation_team on AcceptTeamInvitationPayload {
@@ -53,8 +53,16 @@ graphql`
       }
       organization {
         id
+        isBillingLeader
         name
         isPaid
+        orgUserCount {
+          activeUserCount
+          inactiveUserCount
+        }
+        picture
+        tier
+        billingTier
       }
       ...PublicTeamsFrag_team
     }
@@ -83,7 +91,8 @@ graphql`
 
 graphql`
   fragment AcceptTeamInvitationMutationReply on AcceptTeamInvitationPayload {
-    error {
+    userErrors {
+      code
       message
     }
     meetingId
@@ -173,28 +182,27 @@ export const acceptTeamInvitationTeamOnNext: OnNextHandler<
   }
 }
 
-interface LocalHandler extends HistoryMaybeLocalHandler {
+interface LocalHandler extends NavigateMaybeLocalHandler {
   meetingId?: string | null
   ignoreApproval?: boolean
 }
 
 export const handleAcceptTeamInvitationErrors = (
   atmosphere: Atmosphere,
-  acceptTeamInvitation: null | undefined | {error?: {message: string} | null}
+  acceptTeamInvitation:
+    | null
+    | undefined
+    | {readonly userErrors: ReadonlyArray<{readonly code: string; readonly message: string}>}
 ) => {
-  if (acceptTeamInvitation?.error) {
-    const {message} = acceptTeamInvitation.error
-    if (
-      message === InvitationTokenError.ALREADY_ACCEPTED ||
-      message === InvitationTokenError.NOT_SIGNED_IN
-    )
-      return
-    atmosphere.eventEmitter.emit('addSnackbar', {
-      autoDismiss: 0,
-      key: `acceptTeamInvitation:${message}`,
-      message
-    })
-  }
+  const userError = acceptTeamInvitation?.userErrors[0]
+  if (!userError) return
+  const {code, message} = userError
+  if (code === 'TOKEN_ALREADY_USED' || code === 'NOT_SIGNED_IN') return
+  atmosphere.eventEmitter.emit('addSnackbar', {
+    autoDismiss: 0,
+    key: `acceptTeamInvitation:${message}`,
+    message
+  })
 }
 
 const AcceptTeamInvitationMutation: StandardMutation<
@@ -203,7 +211,7 @@ const AcceptTeamInvitationMutation: StandardMutation<
 > = (
   atmosphere,
   variables,
-  {history, onCompleted, onError, meetingId: locallyRequestedMeetingId, ignoreApproval}
+  {navigate, onCompleted, onError, meetingId: locallyRequestedMeetingId, ignoreApproval}
 ) => {
   return commitMutation<TAcceptTeamInvitationMutation>(atmosphere, {
     mutation,
@@ -213,23 +221,24 @@ const AcceptTeamInvitationMutation: StandardMutation<
       if (!payload) return
       acceptTeamInvitationNotificationUpdater(payload, {atmosphere, store})
     },
-    onError,
+    onError: onError ?? snackOnError(atmosphere),
     onCompleted: (data, errors) => {
       if (onCompleted) {
         onCompleted(data, errors)
       }
       const {acceptTeamInvitation} = data
-      const {team} = acceptTeamInvitation
-      const serverError = getGraphQLError(data, errors)
+      const {team, userErrors} = acceptTeamInvitation
+      const userErrorCode = userErrors[0]?.code
+      const serverError = getMutationError(data, errors)
       if (serverError) {
         const message = serverError.message
-        if (message === InvitationTokenError.NOT_SIGNED_IN) {
+        if (userErrorCode === 'NOT_SIGNED_IN') {
           // if the user follows an invitation link with an invalid auth token, invalidate it
           // TODO what to do here?
-        } else if (message === InvitationTokenError.ALREADY_ACCEPTED) {
+        } else if (userErrorCode === 'TOKEN_ALREADY_USED') {
           handleAuthenticationRedirect(acceptTeamInvitation, {
             atmosphere,
-            history,
+            navigate,
             meetingId: locallyRequestedMeetingId
           })
         } else if (!ignoreApproval) {
@@ -238,7 +247,7 @@ const AcceptTeamInvitationMutation: StandardMutation<
             key: `acceptTeamInvitation:${message}`,
             message,
             action:
-              message === LOCKED_MESSAGE.TEAM_INVITE
+              userErrorCode === 'ORGANIZATION_LOCKED'
                 ? {
                     label: 'Contact Sales',
                     callback: () => window.open('mailto:love@parabol.co?subject=Overdue Payment')
@@ -257,7 +266,7 @@ const AcceptTeamInvitationMutation: StandardMutation<
       })
       handleAuthenticationRedirect(acceptTeamInvitation, {
         atmosphere,
-        history,
+        navigate,
         meetingId: locallyRequestedMeetingId
       })
     }

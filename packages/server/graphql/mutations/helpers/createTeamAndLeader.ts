@@ -6,6 +6,7 @@ import type {DataLoaderInstance} from '../../../dataloader/RootDataLoader'
 import generateUID from '../../../generateUID'
 import getKysely from '../../../postgres/getKysely'
 import type {User} from '../../../postgres/types'
+import promptTemplateRules from '../../public/mutations/helpers/promptTemplateRules'
 
 interface ValidNewTeam {
   id: string
@@ -21,10 +22,24 @@ export default async function createTeamAndLeader(
   newTeam: ValidNewTeam,
   dataLoader: DataLoaderInstance
 ) {
+  const pg = getKysely()
   const {id: userId} = user
   const {id: teamId, orgId, isPublic: requestedIsPublic} = newTeam
-  const organization = await dataLoader.get('organizations').loadNonNull(orgId)
+  const [organization, clusterRow] = await Promise.all([
+    dataLoader.get('organizations').loadNonNull(orgId),
+    pg
+      .selectFrom('CompanyClusterOrganization')
+      .innerJoin(
+        'CompanyCluster',
+        'CompanyCluster.id',
+        'CompanyClusterOrganization.companyClusterId'
+      )
+      .select('CompanyCluster.maxTeamLimitAt')
+      .where('CompanyClusterOrganization.orgId', '=', orgId)
+      .executeTakeFirst()
+  ])
   const {tier} = organization
+  const maxTeamTrialExpiresAt = clusterRow?.maxTeamLimitAt ?? null
 
   const isPublic = tier === 'starter' ? true : requestedIsPublic
 
@@ -41,7 +56,6 @@ export default async function createTeamAndLeader(
     orgId
   })
 
-  const pg = getKysely()
   const suggestedAction = {
     id: generateUID(),
     userId,
@@ -49,9 +63,12 @@ export default async function createTeamAndLeader(
     type: 'inviteYourTeam' as const,
     priority: 2
   }
+
   await Promise.all([
     pg
-      .with('TeamInsert', (qc) => qc.insertInto('Team').values(verifiedTeam))
+      .with('TeamInsert', (qc) =>
+        qc.insertInto('Team').values({...verifiedTeam, maxTeamTrialExpiresAt})
+      )
       .with('TeamMemberInsert', (qc) =>
         qc.insertInto('TeamMember').values({
           id: TeamMemberId.join(teamId, userId),
@@ -73,7 +90,15 @@ export default async function createTeamAndLeader(
             id: generateUID(),
             teamId,
             meetingType: 'retrospective',
-            phaseTypes: ['checkin', 'TEAM_HEALTH', 'reflect', 'group', 'vote', 'discuss'],
+            phaseTypes: [
+              'checkin',
+              'TEAM_HEALTH',
+              'updates',
+              'reflect',
+              'group',
+              'vote',
+              'discuss'
+            ],
             disableAnonymity: false,
             maxVotesPerGroup: MeetingSettingsThreshold.RETROSPECTIVE_MAX_VOTES_PER_GROUP_DEFAULT,
             totalVotes: MeetingSettingsThreshold.RETROSPECTIVE_TOTAL_VOTES_DEFAULT,
@@ -91,6 +116,20 @@ export default async function createTeamAndLeader(
             meetingType: 'poker',
             phaseTypes: ['checkin', 'SCOPE', 'ESTIMATE'],
             selectedTemplateId: 'estimatedEffortTemplate'
+          },
+          {
+            id: generateUID(),
+            teamId,
+            meetingType: 'teamHealth',
+            phaseTypes: ['TEAM_HEALTH_RESPONSE'],
+            selectedTemplateId: 'everythingBagelTemplate'
+          },
+          {
+            id: generateUID(),
+            teamId,
+            meetingType: 'teamPrompt',
+            phaseTypes: ['RESPONSES'],
+            selectedTemplateId: promptTemplateRules.teamPrompt.defaultTemplateId
           }
         ])
       )

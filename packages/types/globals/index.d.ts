@@ -7,6 +7,8 @@ declare module '*.png' {
 declare module '*.svg'
 declare module '*.mp3'
 declare module '*.woff2'
+// bundler-handled, imported for side effects only. TS7 errors (TS2882) without this
+declare module '*.css'
 
 declare module 'babel-plugin-relay/macro' {
   export {graphql as default} from 'react-relay'
@@ -17,9 +19,7 @@ declare module '*.graphql' {
   export = value
 }
 
-declare module 'react-textarea-autosize'
 declare module 'react-copy-to-clipboard'
-declare module 'react/jsx-runtime'
 declare module '@authenio/samlify-node-xmllint'
 declare module 'node-env-flag'
 declare module '*getProjectRoot'
@@ -27,24 +27,31 @@ declare module 'tayden-clusterfck'
 declare module 'jest-extended'
 declare module 'object-hash'
 declare module 'string-score'
-declare module 'md-to-adf'
+
+declare module '*workerManifest.js' {
+  const manifest: {
+    monacoJSONWorker: string[]
+    monacoGraphQLWorker: string[]
+    monacoWorker: string[]
+  }
+  export = manifest
+}
 
 declare let __webpack_public_path__: string
 declare const __PRODUCTION__: boolean
+// in a production build, the nested GitHub, GitLab & Linear fields that the app's persisted operations use
+declare const __NESTED_USAGE__: Record<string, readonly string[]> | null
+// in a production build, each nested endpoint's types pruned to that usage, keyed by its prefix
+declare const __NESTED_TYPE_DEFS__: Record<string, string> | null
 declare const __APP_VERSION__: string
+declare const __COMMIT_HASH__: string
 
 interface Window {
   __ACTION__: {
-    atlassian: string
-    datadogClientToken: string | undefined
-    datadogApplicationId: string | undefined
-    datadogService: string | undefined
-    github: string
     google: string
     googleAnalytics: string
-    mattermostDisabled: boolean | undefined
-    mattermostGlobal: boolean | undefined
-    msTeamsDisabled: boolean | undefined
+    mattermostWebhookIntegrationDisabled: boolean | undefined
+    msTeamsWebhookIntegrationDisabled: boolean | undefined
     publicPath: string
     slack: string
     stripe: string
@@ -55,15 +62,14 @@ interface Window {
     AUTH_GOOGLE_ENABLED: boolean
     AUTH_MICROSOFT_ENABLED: boolean
     AUTH_SSO_ENABLED: boolean
-    AMPLITUDE_WRITE_KEY: string
     microsoftTenantId: string
     microsoft: string
     GLOBAL_BANNER_ENABLED: boolean
     GLOBAL_BANNER_TEXT: string
     GLOBAL_BANNER_BG_COLOR: string
     GLOBAL_BANNER_COLOR: string
-    GIF_PROVIDER: 'gifabol' | 'tenor' | ''
-    HUBSPOT_ERROR_FORM_URL: string
+    GIF_PROVIDER: 'gifabol' | 'klipy' | ''
+    IS_SINGLE_ORG: boolean
   }
 }
 declare type Json = null | boolean | number | string | Json[] | {[key: string]: Json}

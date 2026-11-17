@@ -1,50 +1,43 @@
-import {Component, type ReactNode} from 'react'
+import {type ReactNode, useEffect, useRef, useState} from 'react'
 import {RelayEnvironmentProvider} from 'react-relay'
+import type {Environment} from 'relay-runtime'
 import Atmosphere from '../../Atmosphere'
-import type TLocalAtmosphere from '../../modules/demo/LocalAtmosphere'
 
 interface Props {
   children: ReactNode
-  // LocalAtmosphere has a bunch of junk we don't want to SSR, so we have client-only files pass it in
-  getLocalAtmosphere?: () => Promise<{default: {new (): TLocalAtmosphere}}>
+  // a demo atmosphere has a bunch of junk we don't want to SSR, so we have client-only files pass it in
+  getLocalAtmosphere?: () => Promise<{default: {new (): Environment}}>
 }
 
-class AtmosphereProvider extends Component<Props> {
-  atmosphere?: Atmosphere | TLocalAtmosphere
-  cleanup?: () => void
+const AtmosphereProvider = (props: Props) => {
+  const {children, getLocalAtmosphere} = props
+  const [atmosphere, setAtmosphere] = useState<Environment | undefined>(() => {
+    if (!getLocalAtmosphere) {
+      return new Atmosphere()
+    }
+    return undefined
+  })
 
-  constructor(props: Props) {
-    super(props)
-    if (props.getLocalAtmosphere) {
-      this.loadDemo().catch(() => {
+  useEffect(() => {
+    if (!getLocalAtmosphere && atmosphere instanceof Atmosphere) {
+      const cleanup = atmosphere.registerCookieListener(window)
+      return cleanup
+    }
+    return undefined
+  }, [atmosphere, getLocalAtmosphere])
+
+  const localAtmosphereRef = useRef<Promise<Environment> | null>(null)
+  useEffect(() => {
+    if (getLocalAtmosphere) {
+      localAtmosphereRef.current ??= getLocalAtmosphere().then((mod) => new mod.default())
+      localAtmosphereRef.current.then(setAtmosphere).catch(() => {
         /*ignore*/
       })
-    } else {
-      this.atmosphere = new Atmosphere()
-      this.cleanup = this.atmosphere.registerCookieListener(window)
     }
-  }
+  }, [getLocalAtmosphere])
 
-  componentWillUnmount() {
-    if (this.cleanup) {
-      this.cleanup()
-    }
-  }
-
-  async loadDemo() {
-    const LocalAtmosphere = await this.props.getLocalAtmosphere!().then((mod) => mod.default)
-    this.atmosphere = new LocalAtmosphere()
-    this.forceUpdate()
-  }
-
-  render() {
-    if (!this.atmosphere) return null
-    return (
-      <RelayEnvironmentProvider environment={this.atmosphere}>
-        {this.props.children}
-      </RelayEnvironmentProvider>
-    )
-  }
+  if (!atmosphere) return null
+  return <RelayEnvironmentProvider environment={atmosphere}>{children}</RelayEnvironmentProvider>
 }
 
 export default AtmosphereProvider

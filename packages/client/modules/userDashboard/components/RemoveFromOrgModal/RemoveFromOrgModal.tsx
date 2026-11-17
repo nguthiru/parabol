@@ -1,23 +1,21 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
+import {useNavigate} from 'react-router'
 import type {RemoveFromOrgModal_organizationUsers$key} from '../../../../__generated__/RemoveFromOrgModal_organizationUsers.graphql'
-import DialogContainer from '../../../../components/DialogContainer'
-import DialogContent from '../../../../components/DialogContent'
-import DialogTitle from '../../../../components/DialogTitle'
 import IconLabel from '../../../../components/IconLabel'
-import PrimaryButton from '../../../../components/PrimaryButton'
 import useAtmosphere from '../../../../hooks/useAtmosphere'
 import useMutationProps from '../../../../hooks/useMutationProps'
-import useRouter from '../../../../hooks/useRouter'
 import RemoveOrgUsersMutation from '../../../../mutations/RemoveOrgUsersMutation'
+import {Button} from '../../../../ui/Button/Button'
+import {Dialog} from '../../../../ui/Dialog/Dialog'
+import {DialogActions} from '../../../../ui/Dialog/DialogActions'
+import {DialogContent} from '../../../../ui/Dialog/DialogContent'
+import {DialogTitle} from '../../../../ui/Dialog/DialogTitle'
 import plural from '../../../../utils/plural'
-
-const StyledButton = styled(PrimaryButton)({
-  margin: '1.5rem auto 0'
-})
+import getMutationError from '../../../../utils/relay/getMutationError'
 
 interface Props {
+  isOpen: boolean
   orgId: string
   userIds: string[]
   organizationUsers: RemoveFromOrgModal_organizationUsers$key
@@ -25,11 +23,6 @@ interface Props {
   onSuccess?: () => void
 }
 
-const StyledDialogContainer = styled(DialogContainer)({
-  width: '400px'
-})
-
-// Fragment for organization users that can be potentially removed
 const organizationUsersFragment = graphql`
   fragment RemoveFromOrgModal_organizationUsers on OrganizationUser @relay(plural: true) {
     role
@@ -41,40 +34,29 @@ const organizationUsersFragment = graphql`
 `
 
 const RemoveFromOrgModal = (props: Props) => {
-  const {orgId, userIds, organizationUsers, closePortal, onSuccess} = props
+  const {isOpen, orgId, userIds, organizationUsers, closePortal, onSuccess} = props
   const atmosphere = useAtmosphere()
-  const {history} = useRouter()
-  const {onCompleted, onError, submitMutation, submitting} = useMutationProps()
+  const navigate = useNavigate()
+  const {onCompleted, onError, submitMutation, submitting, error} = useMutationProps({
+    errorDisplay: 'inline'
+  })
   const {viewerId} = atmosphere
 
   const users = useFragment(organizationUsersFragment, organizationUsers)
 
-  // Map users with their removal status and reason
   const usersWithRemovalStatus = users.map((organizationUser) => {
     const isSelf = organizationUser.user.id === viewerId
     const isBillingLeader = organizationUser.role === 'BILLING_LEADER'
     const isOrgAdmin = organizationUser.role === 'ORG_ADMIN'
-
     let reason = ''
     if (isSelf) reason = 'Yourself'
     else if (isOrgAdmin) reason = 'Organization Admin'
     else if (isBillingLeader) reason = 'Billing Leader'
-
-    return {
-      user: organizationUser.user,
-      reason,
-      isRemovable: !reason
-    }
+    return {user: organizationUser.user, reason, isRemovable: !reason}
   })
 
-  // Filter out non-removable users
-  const nonRemovableUsers = usersWithRemovalStatus.filter((user) => !user.isRemovable)
-
-  // Get removable user IDs
-  const removableUserIds = usersWithRemovalStatus
-    .filter((user) => user.isRemovable)
-    .map((user) => user.user.id)
-
+  const nonRemovableUsers = usersWithRemovalStatus.filter((u) => !u.isRemovable)
+  const removableUserIds = usersWithRemovalStatus.filter((u) => u.isRemovable).map((u) => u.user.id)
   const skippedCount = userIds.length - removableUserIds.length
   const removableCount = removableUserIds.length
 
@@ -88,10 +70,11 @@ const RemoveFromOrgModal = (props: Props) => {
       atmosphere,
       {orgId, userIds: removableUserIds},
       {
-        history,
+        navigate,
         onError,
-        onCompleted: () => {
-          onCompleted()
+        onCompleted: (res, errors) => {
+          onCompleted(res, errors)
+          if (getMutationError(res, errors)) return
           closePortal()
           onSuccess?.()
         }
@@ -100,55 +83,57 @@ const RemoveFromOrgModal = (props: Props) => {
   }
 
   return (
-    <StyledDialogContainer>
-      <DialogTitle>{'Are you sure?'}</DialogTitle>
+    <Dialog isOpen={isOpen} onClose={closePortal}>
       <DialogContent>
+        <DialogTitle>Are you sure?</DialogTitle>
         {removableCount > 0 && (
-          <div>
-            {`This will remove ${removableCount} ${plural(removableCount, 'member')} from all teams within the organization. Any outstanding tasks will be given to the respective team leads.`}
-          </div>
+          <p>{`This will remove ${removableCount} ${plural(removableCount, 'member')} from all teams within the organization. Any outstanding tasks will be given to the respective team leads.`}</p>
         )}
-
         {skippedCount > 0 && (
           <div className='mt-4'>
-            <div className='mb-2 font-medium text-slate-700 text-sm'>
+            <div className='mb-2 font-medium text-fg-primary text-sm'>
               {`The following ${plural(skippedCount, 'user')} will not be removed:`}
             </div>
-            <div className='max-h-60 overflow-auto rounded border border-slate-600'>
-              <div className='flex items-center justify-between border-slate-400 border-b bg-slate-100 px-3 py-2 font-semibold text-sm'>
+            <div className='max-h-60 overflow-auto rounded border border-hairline-strong'>
+              <div className='flex items-center justify-between border-hairline-strong border-b bg-surface-raised px-3 py-2 font-semibold text-sm'>
                 <div>Name</div>
                 <div>Reason</div>
               </div>
               {nonRemovableUsers.map((item) => (
                 <div
                   key={item.user.id}
-                  className='flex items-center justify-between border-slate-400 border-b px-3 py-2 last:border-0'
+                  className='flex items-center justify-between border-hairline-strong border-b px-3 py-2 last:border-0'
                 >
                   <div className='font-medium'>{item.user.preferredName}</div>
-                  <div className='text-slate-600 text-sm'>{item.reason}</div>
+                  <div className='text-fg-secondary text-sm'>{item.reason}</div>
                 </div>
               ))}
             </div>
           </div>
         )}
-
-        {removableCount > 0 ? (
-          <StyledButton size='medium' onClick={handleClick} waiting={submitting}>
-            <IconLabel
-              icon='arrow_forward'
-              iconAfter
-              label={`Remove ${removableCount} ${plural(removableCount, 'member')}`}
-            />
-          </StyledButton>
-        ) : (
-          <div className='mt-4'>
-            <StyledButton size='medium' onClick={closePortal}>
+        {error && <div className='mt-4 font-semibold text-fg-error text-sm'>{error.message}</div>}
+        <DialogActions>
+          {removableCount > 0 ? (
+            <>
+              <Button variant='outline' size='md' onClick={closePortal}>
+                Cancel
+              </Button>
+              <Button variant='primary' size='md' onClick={handleClick} disabled={submitting}>
+                <IconLabel
+                  icon='arrow_forward'
+                  iconAfter
+                  label={`Remove ${removableCount} ${plural(removableCount, 'member')}`}
+                />
+              </Button>
+            </>
+          ) : (
+            <Button variant='primary' size='md' onClick={closePortal}>
               <IconLabel icon='close' label='Close' />
-            </StyledButton>
-          </div>
-        )}
+            </Button>
+          )}
+        </DialogActions>
       </DialogContent>
-    </StyledDialogContainer>
+    </Dialog>
   )
 }
 

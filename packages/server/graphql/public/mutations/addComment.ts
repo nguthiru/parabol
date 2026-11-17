@@ -1,16 +1,12 @@
 import {generateText, type JSONContent} from '@tiptap/core'
+import {GraphQLError} from 'graphql'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
-import MeetingMemberId from '../../../../client/shared/gqlIds/MeetingMemberId'
 import TeamMemberId from '../../../../client/shared/gqlIds/TeamMemberId'
 import {getAllNodesAttributesByType} from '../../../../client/shared/tiptap/getAllNodesAttributesByType'
 import {serverTipTapExtensions} from '../../../../client/shared/tiptap/serverTipTapExtensions'
-import type GenericMeetingPhase from '../../../database/types/GenericMeetingPhase'
-import type {NewMeetingPhaseTypeEnum} from '../../../database/types/GenericMeetingPhase'
-import type GenericMeetingStage from '../../../database/types/GenericMeetingStage'
 import generateUID from '../../../generateUID'
 import getKysely from '../../../postgres/getKysely'
 import type {Discussion} from '../../../postgres/types'
-import {analytics} from '../../../utils/analytics/analytics'
 import {getUserId} from '../../../utils/authorization'
 import {convertToTipTap} from '../../../utils/convertToTipTap'
 import publish from '../../../utils/publish'
@@ -53,29 +49,17 @@ const addComment: MutationResolvers['addComment'] = async (
   const operationId = dataLoader.share()
   const subOptions = {mutatorId, operationId}
 
-  //AUTH
   const {discussionId, threadSortOrder, isAnonymous, threadParentId} = comment
   const discussion = await dataLoader.get('discussions').load(discussionId)
   if (!discussion) {
-    return {error: {message: 'Invalid discussion thread'}}
+    throw new GraphQLError('Invalid discussion thread', {extensions: {code: 'BAD_USER_INPUT'}})
   }
   const {meetingId} = discussion
   if (!meetingId) {
-    return {
-      error: {message: 'Discussion does not take place in a meeting'}
-    }
+    throw new GraphQLError('Discussion does not take place in a meeting', {
+      extensions: {code: 'BAD_USER_INPUT'}
+    })
   }
-  const meetingMemberId = MeetingMemberId.join(meetingId, viewerId)
-  const [meeting, viewerMeetingMember, viewer] = await Promise.all([
-    dataLoader.get('newMeetings').loadNonNull(meetingId),
-    dataLoader.get('meetingMembers').load(meetingMemberId),
-    dataLoader.get('users').loadNonNull(viewerId)
-  ])
-
-  if (!viewerMeetingMember) {
-    return {error: {message: 'Not a member of the meeting'}}
-  }
-
   // VALIDATION
   const content = convertToTipTap(comment.content)
   const plaintextContent = generateText(content, serverTipTapExtensions)
@@ -132,19 +116,6 @@ const addComment: MutationResolvers['addComment'] = async (
   }
 
   const data = {commentId, meetingId}
-  const {phases} = meeting!
-  const threadablePhases = [
-    'discuss',
-    'agendaitems',
-    'ESTIMATE',
-    'RESPONSES'
-  ] as NewMeetingPhaseTypeEnum[]
-  const containsThreadablePhase = phases.find(({phaseType}: GenericMeetingPhase) =>
-    threadablePhases.includes(phaseType)
-  )!
-  const {stages} = containsThreadablePhase
-  const isAsync = stages.some((stage: GenericMeetingStage) => stage.isAsync)
-  analytics.commentAdded(viewer, meeting, !!isAnonymous, isAsync, !!threadParentId)
   publish(SubscriptionChannel.MEETING, meetingId, 'AddCommentSuccess', data, subOptions)
   return data
 }

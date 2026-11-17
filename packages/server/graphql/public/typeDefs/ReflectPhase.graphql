@@ -1,5 +1,5 @@
 """
-The meeting phase where all team members check in one-by-one
+The retrospective meeting phase where team members add reflections to prompts
 """
 type ReflectPhase implements NewMeetingPhase {
   """
@@ -23,10 +23,10 @@ type ReflectPhase implements NewMeetingPhase {
   """
   the Prompt that the facilitator wants the group to focus on
   """
-  focusedPrompt: ReflectPrompt
+  focusedPrompt: TemplatePrompt
 
   """
   The prompts used during the reflect phase
   """
-  reflectPrompts: [ReflectPrompt!]!
+  reflectPrompts: [TemplatePrompt!]!
 }

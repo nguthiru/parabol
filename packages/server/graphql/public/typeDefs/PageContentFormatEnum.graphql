@@ -1,0 +1,7 @@
+"""
+The format of a page content string
+"""
+enum PageContentFormatEnum {
+  markdown
+  json
+}

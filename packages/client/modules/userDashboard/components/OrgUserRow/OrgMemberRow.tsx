@@ -1,7 +1,7 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {format} from 'date-fns'
 import type * as React from 'react'
+import {useState} from 'react'
 import {useFragment} from 'react-relay'
 import type {
   OrgMemberRow_organization$data,
@@ -20,15 +20,10 @@ import RowInfoLink from '../../../../components/Row/RowInfoLink'
 import BaseTag from '../../../../components/Tag/BaseTag'
 import InactiveTag from '../../../../components/Tag/InactiveTag'
 import RoleTag from '../../../../components/Tag/RoleTag'
-import useModal from '../../../../hooks/useModal'
 import defaultUserAvatar from '../../../../styles/theme/images/avatar-user.svg'
 import lazyPreload from '../../../../utils/lazyPreload'
-
-const ActionsBlock = styled('div')({
-  alignItems: 'center',
-  display: 'flex',
-  justifyContent: 'flex-end'
-})
+import LeaveOrgModal from '../LeaveOrgModal/LeaveOrgModal'
+import RemoveFromOrgModal from '../RemoveFromOrgModal/RemoveFromOrgModal'
 
 interface Props {
   billingLeaderCount: number
@@ -39,18 +34,9 @@ interface Props {
   onSelectUser?: (userId: string, isSelected: boolean) => void
 }
 
-const LeaveOrgModal = lazyPreload(
-  () => import(/* webpackChunkName: 'LeaveOrgModal' */ '../LeaveOrgModal/LeaveOrgModal')
-)
-
 const OrgAdminActionMenu = lazyPreload(
   () =>
     import(/* webpackChunkName: 'OrgAdminActionMenu' */ '../../../../components/OrgAdminActionMenu')
-)
-
-const RemoveFromOrgModal = lazyPreload(
-  () =>
-    import(/* webpackChunkName: 'RemoveFromOrgModal' */ '../RemoveFromOrgModal/RemoveFromOrgModal')
 )
 
 interface UserAvatarProps {
@@ -99,39 +85,31 @@ const UserActions = ({organizationUser, organization}: UserActionsProps) => {
   const {
     user: {id: userId}
   } = organizationUser
-  const {
-    togglePortal: toggleLeave,
-    modalPortal: leaveModal,
-    closePortal: closeLeaveModal
-  } = useModal()
-  const {
-    togglePortal: toggleRemove,
-    modalPortal: removeModal,
-    closePortal: closeRemoveModal
-  } = useModal()
-
-  // For the RemoveFromOrgModal
-  const organizationUserForModal = [organizationUser]
+  const [isLeaveOpen, setIsLeaveOpen] = useState(false)
+  const [isRemoveOpen, setIsRemoveOpen] = useState(false)
 
   return (
     <RowActions>
-      <ActionsBlock>
+      <div className='flex items-center justify-end'>
         <OrgAdminActionMenu
           organization={organization}
           organizationUser={organizationUser}
-          toggleLeave={toggleLeave}
-          toggleRemove={toggleRemove}
+          toggleLeave={() => setIsLeaveOpen(true)}
+          toggleRemove={() => setIsRemoveOpen(true)}
         />
-        {leaveModal(<LeaveOrgModal orgId={orgId} closePortal={closeLeaveModal} />)}
-        {removeModal(
-          <RemoveFromOrgModal
-            orgId={orgId}
-            userIds={[userId]}
-            organizationUsers={organizationUserForModal}
-            closePortal={closeRemoveModal}
-          />
-        )}
-      </ActionsBlock>
+        <LeaveOrgModal
+          isOpen={isLeaveOpen}
+          orgId={orgId}
+          closePortal={() => setIsLeaveOpen(false)}
+        />
+        <RemoveFromOrgModal
+          isOpen={isRemoveOpen}
+          orgId={orgId}
+          userIds={[userId]}
+          organizationUsers={[organizationUser]}
+          closePortal={() => setIsRemoveOpen(false)}
+        />
+      </div>
     </RowActions>
   )
 }
@@ -190,7 +168,7 @@ const OrgMemberRow = (props: Props) => {
   }
 
   return (
-    <tr className='border-slate-300 border-b last:border-b-0'>
+    <tr className='border-hairline border-b last:border-b-0'>
       <td className='px-2 py-3 align-middle'>
         <div className='flex items-center justify-center'>
           {isViewerOrgAdmin && (
@@ -198,7 +176,7 @@ const OrgMemberRow = (props: Props) => {
               type='checkbox'
               checked={isSelected}
               onChange={handleCheckboxChange}
-              className='h-4 w-4 rounded border-slate-300 text-grape-700 focus:ring-grape-500'
+              className='h-4 w-4 rounded border-hairline-field text-grape-700 focus:ring-grape-500'
             />
           )}
         </div>

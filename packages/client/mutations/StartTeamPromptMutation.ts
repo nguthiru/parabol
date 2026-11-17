@@ -1,13 +1,18 @@
 import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import type {StartTeamPromptMutation as TStartTeamPromptMutation} from '../__generated__/StartTeamPromptMutation.graphql'
-import type {HistoryLocalHandler, StandardMutation} from '../types/relayMutations'
+import type {NavigateLocalHandler, StandardMutation} from '../types/relayMutations'
 
 graphql`
   fragment StartTeamPromptMutation_team on StartTeamPromptSuccess {
     meeting {
       id
       ...TeamPromptMeetingStatus_meeting
+    }
+    meetingSeries {
+      id
+      title
+      nextMeetingDate
     }
     team {
       ...MeetingsDashActiveMeetings @relay(mask: false)
@@ -22,31 +27,58 @@ const mutation = graphql`
     $name: String
     $rrule: RRule
     $gcalInput: CreateGcalEventInput
+    $ignoreSuggestedUpgrade: Boolean
   ) {
-    startTeamPrompt(teamId: $teamId, name: $name, rrule: $rrule, gcalInput: $gcalInput) {
+    startTeamPrompt(
+      teamId: $teamId
+      name: $name
+      rrule: $rrule
+      gcalInput: $gcalInput
+      ignoreSuggestedUpgrade: $ignoreSuggestedUpgrade
+    ) {
       ... on ErrorPayload {
         error {
           message
         }
       }
-      ...StartTeamPromptMutation_team @relay(mask: false)
+      ...StartTeamPromptMutation_team @relay(mask: false) @alias
     }
   }
 `
 
-const StartTeamPromptMutation: StandardMutation<TStartTeamPromptMutation, HistoryLocalHandler> = (
+const StartTeamPromptMutation: StandardMutation<TStartTeamPromptMutation, NavigateLocalHandler> = (
   atmosphere,
   variables,
-  {history, onError, onCompleted}
+  {navigate, onError, onCompleted}
 ) => {
   return commitMutation<TStartTeamPromptMutation>(atmosphere, {
     mutation,
     variables,
     onCompleted: (res, errors) => {
       onCompleted(res, errors)
-      const {startTeamPrompt} = res
-      const {meeting, hasGcalError} = startTeamPrompt
-      if (!meeting) return
+      const startTeamPrompt = res?.startTeamPrompt
+      if (!startTeamPrompt) return
+      const {meeting, meetingSeries, hasGcalError} =
+        startTeamPrompt.StartTeamPromptMutation_team ?? {}
+      if (!meeting) {
+        if (meetingSeries) {
+          atmosphere.eventEmitter.emit('addSnackbar', {
+            key: `meetingScheduled:${meetingSeries.id}`,
+            autoDismiss: 10,
+            showDismissButton: true,
+            message: `🗓️ "${meetingSeries.title}" is scheduled to start at the next recurrence.`
+          })
+          if (hasGcalError) {
+            atmosphere.eventEmitter.emit('addSnackbar', {
+              key: `gcalError:scheduled:${meetingSeries.id}`,
+              autoDismiss: 0,
+              showDismissButton: true,
+              message: `Sorry, we couldn't create your Google Calendar event`
+            })
+          }
+        }
+        return
+      }
       const {id: meetingId} = meeting
       if (hasGcalError) {
         atmosphere.eventEmitter.emit('addSnackbar', {
@@ -56,7 +88,7 @@ const StartTeamPromptMutation: StandardMutation<TStartTeamPromptMutation, Histor
           message: `Sorry, we couldn't create your Google Calendar event`
         })
       }
-      history.push(`/meet/${meetingId}`)
+      navigate(`/meet/${meetingId}`)
     },
     onError
   })

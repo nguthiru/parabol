@@ -1,26 +1,26 @@
 import * as RadixSelect from '@radix-ui/react-select'
 import * as React from 'react'
-import {twMerge} from 'tailwind-merge'
+import {cn} from '../cn'
 
 export const SelectContent = React.forwardRef<
   HTMLDivElement,
   React.ComponentPropsWithoutRef<typeof RadixSelect.Content>
->(({className, children, position = 'popper', ...props}, ref) => (
+>(({className, children, position = 'item-aligned', ...props}, ref) => (
   <RadixSelect.Portal>
     <RadixSelect.Content
       ref={ref}
-      className={twMerge(
-        'relative z-50 overflow-hidden rounded-sm bg-white shadow-card-1',
+      className={cn(
+        'relative z-50 overflow-hidden rounded-sm bg-surface-card shadow-[var(--shadow-card-raised)]',
         className
       )}
       position={position}
       {...props}
     >
       <RadixSelect.Viewport
-        className={twMerge(
-          'p-0',
+        className={cn(
+          'py-1',
           position === 'popper' &&
-            'h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]'
+            'min-h-(--radix-select-trigger-height) w-full min-w-(--radix-select-trigger-width)'
         )}
       >
         {children}

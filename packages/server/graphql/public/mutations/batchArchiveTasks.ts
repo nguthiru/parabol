@@ -9,17 +9,15 @@ import type {MutationResolvers} from '../resolverTypes'
 const batchArchiveTasks: MutationResolvers['batchArchiveTasks'] = async (
   _source,
   {taskIds},
-  {authToken, dataLoader, socketId: mutatorId}
+  context
 ) => {
+  const {authToken, dataLoader, socketId: mutatorId} = context
   const viewerId = getUserId(authToken)
   const operationId = dataLoader.share()
   const subOptions = {mutatorId, operationId}
 
   // VALIDATION
-  const [viewer, tasks] = await Promise.all([
-    dataLoader.get('users').loadNonNull(viewerId),
-    (await dataLoader.get('tasks').loadMany(taskIds)).filter(isValid)
-  ])
+  const tasks = (await dataLoader.get('tasks').loadMany(taskIds)).filter(isValid)
   const validTasksByTeamId = {} as {[teamId: string]: Task[]}
 
   for (const task of tasks) {
@@ -30,7 +28,7 @@ const batchArchiveTasks: MutationResolvers['batchArchiveTasks'] = async (
       // if viewer is the task owner, they can archive
       tasks.push(task)
     } else {
-      if (viewer.tms.includes(teamId)) {
+      if (authToken.tms.includes(teamId)) {
         // or if viewer is in the team of the task, they can also archive
         tasks.push(task)
       }
@@ -40,6 +38,12 @@ const batchArchiveTasks: MutationResolvers['batchArchiveTasks'] = async (
 
   const validTasks = Object.values(validTasksByTeamId).flat()
   const teamIds = Object.keys(validTasksByTeamId)
+  if (context.resourceGrants) {
+    const hasAccess = await Promise.all(teamIds.map((id) => context.resourceGrants!.hasTeam(id)))
+    if (hasAccess.some((v) => !v)) {
+      return {archivedTaskIds: []}
+    }
+  }
   const archivedTaskIds = validTasks.map(({id}) => id)
 
   // RESOLUTION

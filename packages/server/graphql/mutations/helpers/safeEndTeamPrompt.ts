@@ -2,13 +2,13 @@ import type {GraphQLResolveInfo} from 'graphql'
 import {sql} from 'kysely'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
 import TimelineEventTeamPromptComplete from '../../../database/types/TimelineEventTeamPromptComplete'
-import {sendSummaryEmailV2} from '../../../email/sendSummaryEmailV2'
+import {sendSummaryEmail} from '../../../email/sendSummaryEmail'
+import {meetingsEnded} from '../../../metricsHandler'
 import getKysely from '../../../postgres/getKysely'
-import {getTeamPromptResponsesByMeetingId} from '../../../postgres/queries/getTeamPromptResponsesByMeetingIds'
 import type {TeamPromptMeeting} from '../../../postgres/types/Meeting'
-import {analytics} from '../../../utils/analytics/analytics'
 import {getUserId} from '../../../utils/authorization'
 import {Logger} from '../../../utils/Logger'
+import logError from '../../../utils/logError'
 import publish from '../../../utils/publish'
 import standardError from '../../../utils/standardError'
 import type {InternalContext} from '../../graphql'
@@ -20,20 +20,16 @@ import updateQualAIMeetingsCount from './updateQualAIMeetingsCount'
 
 const summarizeTeamPrompt = async (meeting: TeamPromptMeeting, context: InternalContext) => {
   const {dataLoader} = context
-  const operationId = dataLoader.share()
-  const subOptions = {operationId}
   const pg = getKysely()
 
   const summary = await generateStandupMeetingSummary(meeting, dataLoader)
   await pg.updateTable('NewMeeting').set({summary}).where('id', '=', meeting.id).execute()
 
-  dataLoader.clearAll('newMeetings')
   // wait for whole meeting summary to be generated before sending summary email and updating qualAIMeetingCount
   updateQualAIMeetingsCount(meeting.id, meeting.teamId, dataLoader)
   // wait for meeting stats to be generated before sending Slack notification
   IntegrationNotifier.endMeeting(dataLoader, meeting.id, meeting.teamId)
-  const data = {meetingId: meeting.id}
-  publish(SubscriptionChannel.MEETING, meeting.id, 'EndTeamPromptSuccess', data, subOptions)
+  return summary
 }
 
 const safeEndTeamPrompt = async ({
@@ -58,7 +54,11 @@ const safeEndTeamPrompt = async ({
     })
 
   // RESOLUTION
-  const insights = await gatherInsights(meeting, dataLoader)
+  const [insights, team, teamMembers] = await Promise.all([
+    gatherInsights(meeting, dataLoader),
+    dataLoader.get('teams').loadNonNull(teamId),
+    dataLoader.get('teamMembersByTeamId').load(teamId)
+  ])
   await pg
     .updateTable('NewMeeting')
     .set({
@@ -71,14 +71,6 @@ const safeEndTeamPrompt = async ({
     .execute()
   dataLoader.clearAll('newMeetings')
 
-  const [completedTeamPrompt, meetingMembers, team, teamMembers, responses] = await Promise.all([
-    dataLoader.get('newMeetings').loadNonNull(meetingId),
-    dataLoader.get('meetingMembersByMeetingId').load(meetingId),
-    dataLoader.get('teams').loadNonNull(teamId),
-    dataLoader.get('teamMembersByTeamId').load(teamId),
-    getTeamPromptResponsesByMeetingId(meetingId)
-  ])
-
   const events = teamMembers.map(
     (teamMember) =>
       new TimelineEventTeamPromptComplete({
@@ -88,18 +80,37 @@ const safeEndTeamPrompt = async ({
         meetingId
       })
   )
-  await pg.insertInto('TimelineEvent').values(events).execute()
-  summarizeTeamPrompt(meeting, context)
-  analytics.teamPromptEnd(completedTeamPrompt, meetingMembers, responses, dataLoader)
-  const page = await publishSummaryPage(meetingId, context, info)
-  completedTeamPrompt.summaryPageId = page.id
+  meetingsEnded.inc({meeting_type: meeting.meetingType})
+  const [page] = await Promise.all([
+    publishSummaryPage(meetingId, context, info).catch((e) => {
+      logError(e instanceof Error ? e : new Error(`publishSummaryPage failed: ${e}`), {
+        tags: {meetingId, op: 'publishSummaryPage'}
+      })
+      return null
+    }),
+    pg.insertInto('TimelineEvent').values(events).execute()
+  ])
+  if (page) meeting.summaryPageId = page.id
   const data = {
     meetingId,
     teamId
   }
+  publish(
+    SubscriptionChannel.MEETING,
+    meeting.id,
+    'EndTeamPromptSuccess',
+    {meetingId},
+    {operationId}
+  )
   publish(SubscriptionChannel.TEAM, teamId, 'EndTeamPromptSuccess', data, subOptions)
+  // the AI summary can take seconds, so the meeting ends without it, like a retro does
+  summarizeTeamPrompt(meeting, context).catch((e) => {
+    logError(e instanceof Error ? e : new Error(`summarizeTeamPrompt failed: ${e}`), {
+      tags: {meetingId, op: 'summarizeTeamPrompt'}
+    })
+  })
   // do not await sending the email
-  sendSummaryEmailV2(meetingId, page.id, context, info).catch(Logger.log)
+  if (page) sendSummaryEmail(meetingId, page.id, context, info).catch(Logger.log)
   return data
 }
 

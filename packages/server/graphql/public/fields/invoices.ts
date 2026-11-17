@@ -1,28 +1,14 @@
 import makeAppURL from '../../../../client/utils/makeAppURL'
 import appOrigin from '../../../appOrigin'
-import {getUserId, isUserBillingLeader} from '../../../utils/authorization'
 import {fromEpochSeconds} from '../../../utils/epochTime'
 import {getStripeManager} from '../../../utils/stripe'
 import type {Invoice, InvoiceStatusEnum, UserResolvers} from '../resolverTypes'
 
 export const invoices: NonNullable<UserResolvers['invoices']> = async (
   _source,
-  {orgId},
-  {authToken, dataLoader}
+  {orgId, first},
+  {dataLoader}
 ) => {
-  // AUTH
-  const viewerId = getUserId(authToken)
-  if (!(await isUserBillingLeader(viewerId, orgId, dataLoader))) {
-    return {
-      edges: [],
-      pageInfo: {
-        hasNextPage: false,
-        hasPreviousPage: false
-      }
-    }
-  }
-
-  // RESOLUTION
   const org = await dataLoader.get('organizations').loadNonNull(orgId)
   const {stripeId, stripeSubscriptionId} = org
   if (!stripeId || !stripeSubscriptionId)
@@ -81,17 +67,18 @@ export const invoices: NonNullable<UserResolvers['invoices']> = async (
         status
       }
     })
-  const edges = [parabolUpcomingInvoice, ...parabolPastInvoices].map((node) => ({
+  const allEdges = [parabolUpcomingInvoice, ...parabolPastInvoices].map((node) => ({
     cursor: node.periodEndAt,
     node
   }))
+  const edges = allEdges.slice(0, first)
   const firstEdge = edges[0]
   return {
     edges,
     pageInfo: {
       startCursor: firstEdge && firstEdge.cursor,
       endCursor: firstEdge && edges[edges.length - 1]!.cursor,
-      hasNextPage: invoices.has_more,
+      hasNextPage: invoices.has_more || allEdges.length > edges.length,
       hasPreviousPage: false
     }
   }

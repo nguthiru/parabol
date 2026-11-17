@@ -1,108 +1,61 @@
-import styled from '@emotion/styled'
-import {Close} from '@mui/icons-material'
-import {useEffect} from 'react'
-import {TransitionStatus} from '../hooks/useTransition'
-import {DECELERATE} from '../styles/animation'
-import {snackbarShadow} from '../styles/elevation'
-import {PALETTE} from '../styles/paletteV3'
-import {Radius, ZIndex} from '../types/constEnums'
-import type {SnackAction} from './Snackbar'
+import * as Toast from '@radix-ui/react-toast'
+import {Close} from '~/ui/icons'
+import type {SnackAction, SnackLink} from './Snackbar'
 import SnackbarMessageAction from './SnackbarMessageAction'
 
 interface Props {
-  onTransitionEnd: () => void
   message: string
-  status: TransitionStatus
+  link?: SnackLink
   dismissSnack: () => void
   action?: SnackAction
   secondaryAction?: SnackAction
-  onMouseEnter: () => void
-  onMouseLeave: () => void
   showDismissButton?: boolean
 }
 
-const Text = styled('div')({
-  color: '#FFFFFF',
-  fontSize: 14,
-  padding: '6px 8px'
-})
-
-const MessageStyles = styled('div')<{status: TransitionStatus}>(({status}) => ({
-  alignItems: 'center',
-  background: PALETTE.SLATE_700,
-  borderRadius: Radius.SNACKBAR,
-  boxShadow: snackbarShadow,
-  display: 'flex',
-  padding: 8,
-  transition: `all 300ms ${DECELERATE}`,
-  opacity: status === TransitionStatus.MOUNTED || status === TransitionStatus.EXITING ? 0 : 1,
-  transform: `translateY(${
-    status === TransitionStatus.MOUNTED ? 20 : status === TransitionStatus.EXITING ? -20 : 0
-  }px)`,
-  pointerEvents: 'auto',
-  userSelect: 'none',
-  zIndex: ZIndex.SNACKBAR
-}))
-
-const DismissButton = styled('button')({
-  border: 'none',
-  backgroundColor: 'inherit',
-  marginLeft: '8px',
-  cursor: 'pointer',
-  padding: 5,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center'
-})
-
-const StyledIcon = styled(Close)({
-  color: PALETTE.SLATE_500,
-  height: 18,
-  width: 18,
-  '&:hover': {
-    opacity: 0.5
-  }
-})
-const useTransitionEnd = (
-  timeout: number,
-  status: TransitionStatus,
-  onTransitionEnd: () => void
-) => {
-  useEffect(() => {
-    setTimeout(onTransitionEnd, timeout)
-  }, [status])
-}
-
 const SnackbarMessage = (props: Props) => {
-  const {
-    action,
-    secondaryAction,
-    status,
-    message,
-    onTransitionEnd,
-    dismissSnack,
-    onMouseEnter,
-    onMouseLeave,
-    showDismissButton
-  } = props
-  useTransitionEnd(300, status, onTransitionEnd)
+  const {action, secondaryAction, message, link, dismissSnack, showDismissButton} = props
   return (
     <div className='pb-2 print:hidden'>
-      <MessageStyles
-        status={status}
-        onMouseEnter={onMouseEnter}
-        onMouseLeave={onMouseLeave}
+      <div
+        className='pointer-events-auto z-snackbar flex select-none items-center rounded-sm bg-slate-700 p-2 shadow-snackbar'
         onClick={dismissSnack}
       >
-        <Text>{message}</Text>
+        <Toast.Description asChild>
+          <div className='px-2 py-1.5 text-sm text-white leading-[normal]'>
+            {link ? (
+              <>
+                {message}{' '}
+                <button
+                  type='button'
+                  className='cursor-pointer underline'
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    link.callback()
+                  }}
+                >
+                  {link.label}
+                </button>
+                {link.suffix}
+              </>
+            ) : (
+              message
+            )}
+          </div>
+        </Toast.Description>
         <SnackbarMessageAction action={action} />
         <SnackbarMessageAction action={secondaryAction} />
         {showDismissButton && (
-          <DismissButton onClick={dismissSnack}>
-            <StyledIcon />
-          </DismissButton>
+          <button
+            className='ml-2 flex cursor-pointer items-center justify-center border-none bg-inherit p-[5px]'
+            onClick={(e) => {
+              e.stopPropagation()
+              dismissSnack()
+            }}
+          >
+            <Close className='h-[18px] w-[18px] text-slate-500 hover:opacity-50' />
+          </button>
         )}
-      </MessageStyles>
+      </div>
     </div>
   )
 }

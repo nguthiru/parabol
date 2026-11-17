@@ -1,12 +1,13 @@
 import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
-import {matchPath} from 'react-router-dom'
+import {matchPath} from 'react-router'
 import type {Disposable, RecordSourceProxy} from 'relay-runtime'
 import type {StartDraggingReflectionMutation_meeting$data} from '~/__generated__/StartDraggingReflectionMutation_meeting.graphql'
 import type {StartDraggingReflectionMutation as TStartDraggingReflectionMutation} from '../__generated__/StartDraggingReflectionMutation.graphql'
 import type Atmosphere from '../Atmosphere'
 import type {ClientRetroReflection} from '../types/clientSchema'
 import type {LocalHandlers, SharedUpdater} from '../types/relayMutations'
+import {snackOnError} from './handlers/snackOnError'
 
 graphql`
   fragment StartDraggingReflectionMutation_meeting on StartDraggingReflectionPayload {
@@ -49,8 +50,8 @@ export const startDraggingReflectionMeetingUpdater: SharedUpdater<
 > = (payload, {atmosphere, store}: UpdaterOptions) => {
   const meetingId = payload.getValue('meetingId')
   const {pathname} = window.location
-  const meetingRoute = matchPath(pathname, {path: `/meet/${meetingId}`})
-  const isDemoRoute = matchPath(pathname, {path: `/retrospective-demo`})
+  const meetingRoute = matchPath({path: `/meet/${meetingId}`, end: false}, pathname)
+  const isDemoRoute = matchPath({path: '/retrospective-demo', end: false}, pathname)
   /*
    * Avoid adding reflectionsInFlight on clients that are not in the meeting because
    * we can't call the endDrag handler to remove them because
@@ -113,7 +114,7 @@ const StartDraggingReflectionMutation = (
   return commitMutation<TStartDraggingReflectionMutation>(atmosphere, {
     mutation,
     variables,
-    onError,
+    onError: onError ?? snackOnError(atmosphere),
     onCompleted,
     updater: (store) => {
       const {viewerId} = atmosphere

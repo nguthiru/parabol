@@ -1,18 +1,26 @@
 import type {Editor} from '@tiptap/core'
-import {TiptapLinkExtension} from '../components/promptResponse/TiptapLinkExtension'
+import {TiptapLinkExtension} from '../components/TipTapEditor/TiptapLinkExtension'
+import {EmbedBlock} from './extensions/embedBlock/EmbedBlock'
+import FileBlock from './extensions/fileBlock/FileBlock'
+import {FileUpload} from './extensions/fileUpload/FileUpload'
 import {ImageBlock} from './extensions/imageBlock/ImageBlock'
-import {ImageUpload} from './extensions/imageUpload/ImageUpload'
 import {InsightsBlock} from './extensions/insightsBlock/InsightsBlock'
+import {ResponseBlock} from './extensions/insightsBlock/ResponseBlock'
 import {TaskBlock} from './extensions/insightsBlock/TaskBlock'
 import {PageLinkBlock} from './extensions/pageLinkBlock/PageLinkBlock'
+import {TableOfContents} from './extensions/tableOfContents/TableOfContents'
 
 const customNodes = [
   TiptapLinkExtension.name,
   PageLinkBlock.name,
-  ImageUpload.name,
+  FileUpload.name,
+  FileBlock.name,
+  ResponseBlock.name,
   InsightsBlock.name,
+  EmbedBlock.name,
   ImageBlock.name,
-  TaskBlock.name
+  TaskBlock.name,
+  TableOfContents.name
 ]
 
 // if the view is not mounted yet, view.domAtPos will throw a fatal.

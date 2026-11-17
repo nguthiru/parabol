@@ -1,7 +1,5 @@
-import {fetch} from '@whatwg-node/fetch'
 import {createSigner, httpbis} from 'http-message-signatures'
-import {MAX_REQUEST_TIME} from 'parabol-client/utils/constants'
-import {Logger} from './Logger'
+import postWebhook from './postWebhook'
 
 // Mattermost is a server-only integration for now, unlike the Slack integration
 
@@ -16,11 +14,9 @@ export interface MattermostApiResponse {
   error?: string
 }
 
-abstract class MattermostManager {
+class MattermostServerManager {
   webhookUrl: string
   secret?: string
-  abstract fetch: typeof fetch
-  headers: any
 
   constructor(webhookUrl: string, secret?: string) {
     this.webhookUrl = webhookUrl
@@ -61,29 +57,8 @@ abstract class MattermostManager {
       headers['Signature'] = signedRequest.headers['Signature']!
       headers['Signature-Input'] = signedRequest.headers['Signature-Input']!
     }
-    try {
-      const res = await this.fetch(url, {
-        method,
-        headers,
-        body,
-        signal: AbortSignal.timeout(MAX_REQUEST_TIME)
-      })
-      if (res.status !== 200) {
-        if (res.headers.get('content-type') === 'application/json') {
-          const {message: error} = await res.json()
-          return new Error(`${res.status}: ${error}`)
-        } else {
-          return new Error(`${res.status}: ${res.statusText}`)
-        }
-      }
-      return res
-    } catch (error) {
-      if (error instanceof Error) {
-        Logger.warn(error)
-        return error
-      }
-      return new Error('Mattermost is not responding')
-    }
+
+    return postWebhook('Mattermost', url, {headers, body})
   }
 
   async postMessage(textOrAttachmentsArray: string | unknown[], notificationText?: string) {
@@ -106,13 +81,6 @@ abstract class MattermostManager {
           }
 
     return await this.post(payload)
-  }
-}
-
-class MattermostServerManager extends MattermostManager {
-  fetch = fetch
-  constructor(webhookUrl: string, secret?: string) {
-    super(webhookUrl, secret)
   }
 }
 

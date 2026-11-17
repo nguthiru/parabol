@@ -1,0 +1,77 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import findStageById from 'parabol-client/utils/meetings/findStageById'
+import ScheduledJobMeetingStageTimeLimit from '../../../database/types/ScheduledJobMetingStageTimeLimit'
+import getKysely from '../../../postgres/getKysely'
+import publish from '../../../utils/publish'
+import {IntegrationNotifier} from '../../mutations/helpers/notifications/IntegrationNotifier'
+import removeScheduledJobs from '../../mutations/helpers/removeScheduledJobs'
+import type {MutationResolvers} from '../resolverTypes'
+
+const BAD_CLOCK_THRESH = 2000
+const AVG_PING = 150
+
+const setStageTimer: MutationResolvers['setStageTimer'] = async (
+  _source,
+  {meetingId, scheduledEndTime: newScheduledEndTime, timeRemaining},
+  {dataLoader, socketId: mutatorId}
+) => {
+  const pg = getKysely()
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+  const now = new Date()
+
+  // AUTH
+  const meeting = await dataLoader.get('newMeetings').loadNonNull(meetingId)
+  const {endedAt, facilitatorStageId, phases, teamId} = meeting
+  if (endedAt) throw new GraphQLError('Meeting already ended', {extensions: {code: 'CONFLICT'}})
+
+  // VALIDATION
+  if (newScheduledEndTime && newScheduledEndTime.getTime() < now.getTime()) {
+    throw new GraphQLError('Time must be in the future', {extensions: {code: 'BAD_USER_INPUT'}})
+  }
+
+  const stageRes = findStageById(phases, facilitatorStageId)!
+  const {stage} = stageRes
+  const {scheduledEndTime, isComplete} = stage
+  if (isComplete) {
+    throw new GraphQLError('Stage is already complete', {extensions: {code: 'CONFLICT'}})
+  }
+
+  // RESOLUTION
+  if (scheduledEndTime) {
+    await removeScheduledJobs(scheduledEndTime, {meetingId})
+  }
+  if (newScheduledEndTime) {
+    if (timeRemaining) {
+      stage.isAsync = false
+      const actualTimeRemaining = newScheduledEndTime.getTime() - now.getTime()
+      const badClientClock = Math.abs(timeRemaining - actualTimeRemaining) > BAD_CLOCK_THRESH
+      stage.scheduledEndTime = badClientClock
+        ? new Date(now.getTime() + timeRemaining - AVG_PING)
+        : newScheduledEndTime
+    } else {
+      stage.isAsync = true
+      stage.scheduledEndTime = newScheduledEndTime
+      await pg
+        .insertInto('ScheduledJob')
+        .values(new ScheduledJobMeetingStageTimeLimit(newScheduledEndTime, meetingId))
+        .execute()
+      IntegrationNotifier.startTimeLimit(dataLoader, newScheduledEndTime, meetingId, teamId)
+    }
+  } else {
+    stage.isAsync = null
+    stage.scheduledEndTime = null
+  }
+
+  await pg
+    .updateTable('NewMeeting')
+    .set({phases: JSON.stringify(phases)})
+    .where('id', '=', meetingId)
+    .execute()
+  const data = {meetingId, stageId: facilitatorStageId}
+  publish(SubscriptionChannel.MEETING, meetingId, 'SetStageTimerPayload', data, subOptions)
+  return data
+}
+
+export default setStageTimer

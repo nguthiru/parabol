@@ -2,53 +2,57 @@ import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
 import useAtmosphere from '~/hooks/useAtmosphere'
 import type {RemoveTeamMemberModal_teamMember$key} from '../../../../__generated__/RemoveTeamMemberModal_teamMember.graphql'
-import DialogContainer from '../../../../components/DialogContainer'
-import DialogContent from '../../../../components/DialogContent'
-import DialogTitle from '../../../../components/DialogTitle'
 import IconLabel from '../../../../components/IconLabel'
-import PrimaryButton from '../../../../components/PrimaryButton'
 import RemoveTeamMemberMutation from '../../../../mutations/RemoveTeamMemberMutation'
+import {Button} from '../../../../ui/Button/Button'
+import {Dialog} from '../../../../ui/Dialog/Dialog'
+import {DialogActions} from '../../../../ui/Dialog/DialogActions'
+import {DialogContent} from '../../../../ui/Dialog/DialogContent'
+import {DialogTitle} from '../../../../ui/Dialog/DialogTitle'
 
 interface Props {
+  isOpen: boolean
   closePortal: () => void
   teamMember: RemoveTeamMemberModal_teamMember$key
 }
 
 const RemoveTeamMemberModal = (props: Props) => {
   const atmosphere = useAtmosphere()
-  const {closePortal, teamMember: teamMemberRef} = props
+  const {isOpen, closePortal, teamMember: teamMemberRef} = props
   const teamMember = useFragment(
     graphql`
       fragment RemoveTeamMemberModal_teamMember on TeamMember {
-        teamMemberId: id
+        teamId
         user {
+          id
           preferredName
         }
       }
     `,
     teamMemberRef
   )
-  const {teamMemberId, user} = teamMember
-  const {preferredName} = user
+  const {teamId, user} = teamMember
+  const {preferredName, id: userId} = user
   const handleClick = () => {
     closePortal()
-    RemoveTeamMemberMutation(atmosphere, {teamMemberId})
+    RemoveTeamMemberMutation(atmosphere, {userId, teamId})
   }
   return (
-    <DialogContainer>
-      <DialogTitle>Are you sure?</DialogTitle>
+    <Dialog isOpen={isOpen} onClose={closePortal}>
       <DialogContent>
-        This will remove {preferredName} from the team.
-        <br />
-        <PrimaryButton size='medium' className='mx-auto mt-6 mb-0' onClick={handleClick}>
-          <IconLabel
-            icon='arrow_forward'
-            iconAfter
-            label={<div className='break-word whitespace-normal'>Remove {preferredName}</div>}
-          />
-        </PrimaryButton>
+        <DialogTitle>Are you sure?</DialogTitle>
+        <p>This will remove {preferredName} from the team.</p>
+        <DialogActions>
+          <Button variant='primary' size='md' onClick={handleClick}>
+            <IconLabel
+              icon='arrow_forward'
+              iconAfter
+              label={<div className='break-word whitespace-normal'>Remove {preferredName}</div>}
+            />
+          </Button>
+        </DialogActions>
       </DialogContent>
-    </DialogContainer>
+    </Dialog>
   )
 }
 

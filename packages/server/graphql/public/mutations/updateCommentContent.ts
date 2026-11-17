@@ -1,13 +1,12 @@
 import {generateText} from '@tiptap/core'
+import {GraphQLError} from 'graphql'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
-import toTeamMemberId from 'parabol-client/utils/relay/toTeamMemberId'
 import {serverTipTapExtensions} from '../../../../client/shared/tiptap/serverTipTapExtensions'
 import {PARABOL_AI_USER_ID} from '../../../../client/utils/constants'
 import getKysely from '../../../postgres/getKysely'
 import {getUserId} from '../../../utils/authorization'
 import {convertToTipTap} from '../../../utils/convertToTipTap'
 import publish from '../../../utils/publish'
-import standardError from '../../../utils/standardError'
 import type {MutationResolvers} from '../resolverTypes'
 
 const updateCommentContent: MutationResolvers['updateCommentContent'] = async (
@@ -20,28 +19,21 @@ const updateCommentContent: MutationResolvers['updateCommentContent'] = async (
 
   // AUTH
   const viewerId = getUserId(authToken)
-  const meetingMemberId = toTeamMemberId(meetingId, viewerId)
-  const [comment, viewerMeetingMember] = await Promise.all([
-    dataLoader.get('comments').load(commentId),
-    dataLoader.get('meetingMembers').load(meetingMemberId)
-  ])
+  const comment = await dataLoader.get('comments').load(commentId)
   if (!comment || !comment.isActive) {
-    return standardError(new Error('comment not found'), {userId: viewerId})
-  }
-  if (!viewerMeetingMember) {
-    return {error: {message: `Not a member of the meeting`}}
+    throw new GraphQLError('comment not found', {extensions: {code: 'NOT_FOUND'}})
   }
   const {createdBy, discussionId} = comment
   const discussion = await dataLoader.get('discussions').loadNonNull(discussionId)
   if (discussion.meetingId !== meetingId) {
-    return {error: {message: `Comment is not from this meeting`}}
+    throw new GraphQLError(`Comment is not from this meeting`, {
+      extensions: {code: 'BAD_USER_INPUT'}
+    })
   }
   if (createdBy !== viewerId && createdBy !== PARABOL_AI_USER_ID) {
-    return {
-      error: {
-        message: 'Can only update your own comment or Parabol AI comments'
-      }
-    }
+    throw new GraphQLError('Can only update your own comment or Parabol AI comments', {
+      extensions: {code: 'FORBIDDEN'}
+    })
   }
 
   // VALIDATION

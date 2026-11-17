@@ -1,3 +1,6 @@
+import crypto from 'crypto'
+import http from 'http'
+import type {AddressInfo} from 'net'
 import {getUserOrgs, getUserTeams, sendIntranet, sendPublic, signUp} from './common'
 
 const serverBaseUrl = 'https://jira.example.com/'
@@ -46,15 +49,13 @@ const setOrgUserRole = async (orgId: string, userId: string, role: string) => {
   return setOrgUserRole
 }
 
-test('Add integration provider', async () => {
-  const {userId, cookie} = await signUp()
-
-  const orgId = (await getUserOrgs(userId))[0].id
-  const teamId = (await getUserTeams(userId))[0].id
-
-  await setOrgUserRole(orgId, userId, 'ORG_ADMIN')
-
-  const addIntegrationProvider = await sendPublic({
+const addJiraServerProvider = (
+  orgId: string,
+  cookie: string,
+  serverBaseUrl: string,
+  secret = consumerSecret
+) =>
+  sendPublic({
     query: `
       mutation AddIntegrationProvider($input: AddIntegrationProviderInput!) {
         addIntegrationProvider(input: $input) {
@@ -82,12 +83,57 @@ test('Add integration provider', async () => {
         oAuth1ProviderMetadataInput: {
           serverBaseUrl,
           consumerKey,
-          consumerSecret
+          consumerSecret: secret
         }
       }
     },
     cookie
   })
+
+const signUpOrgAdmin = async () => {
+  const {userId, cookie} = await signUp()
+  const orgId = (await getUserOrgs(userId))[0].id
+  const teamId = (await getUserTeams(userId))[0].id
+  await setOrgUserRole(orgId, userId, 'ORG_ADMIN')
+  return {cookie, orgId, teamId}
+}
+
+const CREATE_OAUTH1_AUTHORIZE_URL = `
+  mutation CreateOAuth1AuthorizeUrl($providerId: ID!, $teamId: ID!) {
+    createOAuth1AuthorizeUrl(providerId: $providerId, teamId: $teamId) {
+      error {
+        message
+      }
+      url
+    }
+  }
+`
+
+let requestTokenCount = 0
+const jiraServer = http.createServer((_req, res) => {
+  requestTokenCount++
+  res.end('oauth_callback_confirmed=true&oauth_token=requestToken1')
+})
+let jiraServerUrl: string
+
+beforeAll(async () => {
+  await new Promise<void>((resolve) => jiraServer.listen(0, '127.0.0.1', resolve))
+  jiraServerUrl = `http://127.0.0.1:${(jiraServer.address() as AddressInfo).port}`
+})
+
+afterAll(() => {
+  jiraServer.close()
+})
+
+test('Add integration provider', async () => {
+  const {userId, cookie} = await signUp()
+
+  const orgId = (await getUserOrgs(userId))[0].id
+  const teamId = (await getUserTeams(userId))[0].id
+
+  await setOrgUserRole(orgId, userId, 'ORG_ADMIN')
+
+  const addIntegrationProvider = await addJiraServerProvider(orgId, cookie, serverBaseUrl)
 
   expect(addIntegrationProvider).toMatchObject({
     data: {
@@ -149,3 +195,101 @@ test('Add integration provider', async () => {
     }
   })
 })
+
+test('an OAuth1 authorize URL is created for a team in the provider’s organization', async () => {
+  const {cookie, orgId, teamId} = await signUpOrgAdmin()
+  const added = await addJiraServerProvider(orgId, cookie, jiraServerUrl)
+  const providerId = added.data.addIntegrationProvider.provider.id
+
+  const res = await sendPublic({
+    query: CREATE_OAUTH1_AUTHORIZE_URL,
+    variables: {providerId, teamId},
+    cookie
+  })
+
+  expect(res).toEqual({
+    data: {
+      createOAuth1AuthorizeUrl: {
+        error: null,
+        url: `${jiraServerUrl}/plugins/servlet/oauth/authorize?oauth_token=requestToken1`
+      }
+    }
+  })
+})
+
+test('an OAuth1 authorize URL is refused for a team outside the provider’s organization', async () => {
+  const [{cookie, orgId}, outsider] = await Promise.all([signUpOrgAdmin(), signUp()])
+  const added = await addJiraServerProvider(orgId, cookie, jiraServerUrl)
+  const providerId = added.data.addIntegrationProvider.provider.id
+  const requestTokenCountBefore = requestTokenCount
+
+  const res = await sendPublic({
+    query: CREATE_OAUTH1_AUTHORIZE_URL,
+    variables: {providerId, teamId: outsider.teamId},
+    cookie: outsider.cookie
+  })
+
+  expect(res).toEqual({
+    data: {createOAuth1AuthorizeUrl: null},
+    errors: [
+      expect.objectContaining({
+        message: 'Provider is not available to this team',
+        extensions: expect.objectContaining({code: 'FORBIDDEN'})
+      })
+    ]
+  })
+  expect(requestTokenCount).toBe(requestTokenCountBefore)
+})
+
+const {privateKey: ecPrivateKey} = crypto.generateKeyPairSync('ec', {
+  namedCurve: 'prime256v1',
+  privateKeyEncoding: {type: 'pkcs8', format: 'pem'},
+  publicKeyEncoding: {type: 'spki', format: 'pem'}
+})
+const {privateKey: encryptedRSAPrivateKey, publicKey: rsaPublicKey} = crypto.generateKeyPairSync(
+  'rsa',
+  {
+    modulusLength: 2048,
+    privateKeyEncoding: {type: 'pkcs8', format: 'pem', cipher: 'aes-256-cbc', passphrase: 'secret'},
+    publicKeyEncoding: {type: 'spki', format: 'pem'}
+  }
+)
+
+test.each([
+  ['a shared secret', 'not-a-private-key'],
+  ['an EC private key', ecPrivateKey],
+  ['an encrypted RSA private key', encryptedRSAPrivateKey],
+  ['an RSA public key', rsaPublicKey]
+])(
+  'a provider with %s as its consumer secret is refused and leaves the existing one working',
+  async (_label, secret) => {
+    const {cookie, orgId, teamId} = await signUpOrgAdmin()
+    const added = await addJiraServerProvider(orgId, cookie, jiraServerUrl)
+    const providerId = added.data.addIntegrationProvider.provider.id
+
+    const refused = await addJiraServerProvider(orgId, cookie, jiraServerUrl, secret)
+    expect(refused).toEqual({
+      data: null,
+      errors: [
+        expect.objectContaining({
+          message: 'consumerSecret must be an unencrypted PEM RSA private key',
+          extensions: expect.objectContaining({code: 'BAD_USER_INPUT'})
+        })
+      ]
+    })
+
+    const res = await sendPublic({
+      query: CREATE_OAUTH1_AUTHORIZE_URL,
+      variables: {providerId, teamId},
+      cookie
+    })
+    expect(res).toEqual({
+      data: {
+        createOAuth1AuthorizeUrl: {
+          error: null,
+          url: `${jiraServerUrl}/plugins/servlet/oauth/authorize?oauth_token=requestToken1`
+        }
+      }
+    })
+  }
+)

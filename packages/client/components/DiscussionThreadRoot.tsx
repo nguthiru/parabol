@@ -2,20 +2,19 @@ import {type ReactNode, type RefObject, Suspense} from 'react'
 import discussionThreadQuery, {
   type DiscussionThreadQuery
 } from '../__generated__/DiscussionThreadQuery.graphql'
-import type {RetroDiscussPhase_meeting$data} from '../__generated__/RetroDiscussPhase_meeting.graphql'
 import useQueryLoaderNow from '../hooks/useQueryLoaderNow'
 import DiscussionThread from './DiscussionThread'
 import type {DiscussionThreadables} from './DiscussionThreadList'
 
 interface Props {
-  meetingContentRef?: RefObject<HTMLDivElement>
+  meetingContentRef?: RefObject<HTMLDivElement | null>
   discussionId: string
   allowedThreadables: DiscussionThreadables[]
   width?: string
   header?: ReactNode
   emptyState?: ReactNode
-  showTranscription?: boolean
-  transcription?: RetroDiscussPhase_meeting$data['transcription']
+  autoFocus?: boolean
+  showLastTopicLine?: boolean
 }
 
 const DiscussionThreadRoot = (props: Props) => {
@@ -26,8 +25,8 @@ const DiscussionThreadRoot = (props: Props) => {
     width,
     header,
     emptyState,
-    transcription,
-    showTranscription
+    autoFocus,
+    showLastTopicLine
   } = props
   const queryRef = useQueryLoaderNow<DiscussionThreadQuery>(discussionThreadQuery, {discussionId})
   return (
@@ -40,8 +39,8 @@ const DiscussionThreadRoot = (props: Props) => {
           width={width}
           header={header}
           emptyState={emptyState}
-          transcription={transcription}
-          showTranscription={showTranscription}
+          autoFocus={autoFocus}
+          showLastTopicLine={showLastTopicLine}
         />
       )}
     </Suspense>

@@ -20,7 +20,7 @@ type RetroDiscussStage implements NewMeetingStage & DiscussionThreadStage {
   """
   The meeting this stage belongs to
   """
-  meeting: NewMeeting
+  meeting: NewMeeting!
 
   """
   true if the facilitator has completed this stage, else false. Should be boolean(endAt)
@@ -92,6 +92,11 @@ type RetroDiscussStage implements NewMeetingStage & DiscussionThreadStage {
   The number of milliseconds left before the scheduled end time. Useful for unsynced client clocks. null if scheduledEndTime is null
   """
   timeRemaining: Float
+
+  """
+  The 0-based position of this stage within its phase, ordered by sortOrder.
+  """
+  stageIdx: Int!
 
   """
   The ID to find the discussion that goes in the stage

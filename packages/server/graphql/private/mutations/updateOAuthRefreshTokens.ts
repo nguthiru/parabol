@@ -1,7 +1,8 @@
-import {isNotNull} from 'parabol-client/utils/predicates'
-import {selectAtlassianAuth} from '../../../postgres/select'
-import isNotError from '../../errorFilter'
+import {selectTeamMemberIntegrationAuth} from '../../../postgres/select'
 import type {MutationResolvers} from '../resolverTypes'
+
+// auth.atlassian.com throttles a burst of thousands of refreshes, answering with non-JSON pages and dropped connections
+const MAX_CONCURRENT_REFRESHES = 3
 
 const updateOAuthRefreshTokens: MutationResolvers['updateOAuthRefreshTokens'] = async (
   _source,
@@ -9,14 +10,25 @@ const updateOAuthRefreshTokens: MutationResolvers['updateOAuthRefreshTokens'] = 
   {dataLoader}
 ) => {
   // RESOLUTION
-  const atlassianAuthsToUpdate = await selectAtlassianAuth()
+  const atlassianAuthRows = await selectTeamMemberIntegrationAuth()
+    .select(['userId', 'teamId'])
+    .where('service', '=', 'jira')
     .where('updatedAt', '<=', updatedBefore)
+    .where('isActive', '=', true)
     .execute()
-  const updatedAtlassianAuths = (
-    await dataLoader.get('freshAtlassianAuth').loadMany(atlassianAuthsToUpdate)
-  ).filter((auth) => isNotNull(auth) && isNotError(auth))
-
-  return updatedAtlassianAuths.length
+  // distinct on userId, since freshAtlassianAuth will renew all active tokens across all teams for a user
+  const atlassianAuthsToUpdate = [
+    ...new Map(atlassianAuthRows.map((row) => [row.userId, row])).values()
+  ]
+  let refreshedCount = 0
+  const refreshUntilNoneRemain = async () => {
+    for (let key = atlassianAuthsToUpdate.pop(); key; key = atlassianAuthsToUpdate.pop()) {
+      const auth = await dataLoader.get('freshAtlassianAuth').load(key)
+      if (auth) refreshedCount++
+    }
+  }
+  await Promise.all(Array.from({length: MAX_CONCURRENT_REFRESHES}, refreshUntilNoneRemain))
+  return refreshedCount
 }
 
 export default updateOAuthRefreshTokens

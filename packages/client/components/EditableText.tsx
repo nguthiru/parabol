@@ -1,95 +1,9 @@
-import styled from '@emotion/styled'
-import {Edit} from '@mui/icons-material'
 import type * as React from 'react'
-import {forwardRef, useEffect, useRef, useState} from 'react'
+import {forwardRef, useEffect, useLayoutEffect, useRef, useState} from 'react'
 import TextAreaAutoSize from 'react-textarea-autosize'
-import {PALETTE} from '../styles/paletteV3'
-import {FONT_FAMILY} from '../styles/typographyV2'
+import {Edit} from '~/ui/icons'
+import {cn} from '../ui/cn'
 import type Legitity from '../validation/Legitity'
-
-const StaticBlock = styled('div')<{disabled: boolean | undefined}>(({disabled}) => ({
-  alignItems: 'center',
-  cursor: disabled ? 'default' : 'pointer',
-  display: 'inline-flex',
-  gap: '4px',
-  fontFamily: FONT_FAMILY.SANS_SERIF,
-  fontSize: 'inherit',
-  fontWeight: 'inherit',
-  lineHeight: 'inherit',
-  outline: disabled ? 'none' : undefined,
-  ':hover': {
-    opacity: disabled ? undefined : 0.5
-  }
-}))
-
-const Placeholder = styled('div')({
-  color: PALETTE.SLATE_600
-})
-
-const StaticValue = styled('div')({
-  color: PALETTE.SLATE_700
-})
-
-const Error = styled('div')({
-  color: PALETTE.TOMATO_500,
-  fontSize: 14
-})
-
-const StyledIcon = styled(Edit)({
-  color: PALETTE.SLATE_600,
-  height: 18,
-  width: 18,
-  marginLeft: 8
-})
-
-const Input = styled('input')({
-  backgroundColor: 'transparent',
-  border: 0,
-  color: PALETTE.SLATE_700,
-  display: 'inline-block',
-  fontSize: 'inherit',
-  fontWeight: 'inherit',
-  lineHeight: 'inherit',
-  outline: 'none',
-  padding: '0 2px', // Add small padding to prevent text touching edges
-  width: 'auto',
-  minWidth: '50px'
-  // Remove transition to make width changes immediate
-})
-
-const HiddenSpan = styled('span')({
-  position: 'absolute',
-  visibility: 'hidden',
-  height: 0,
-  whiteSpace: 'pre',
-  fontSize: 'inherit',
-  fontWeight: 'inherit',
-  fontFamily: 'inherit',
-  lineHeight: 'inherit'
-})
-
-const TextArea = styled(TextAreaAutoSize)({
-  backgroundColor: 'transparent',
-  border: 0,
-  color: PALETTE.SLATE_700,
-  display: 'block',
-  fontSize: 'inherit',
-  fontWeight: 'inherit',
-  lineHeight: 'inherit',
-  outline: 'none',
-  padding: 0,
-  resize: 'none',
-  width: '100%'
-})
-
-const Form = styled('form')({
-  border: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  margin: 0,
-  padding: 0,
-  position: 'relative'
-})
 
 interface Props {
   autoFocus?: boolean
@@ -106,7 +20,7 @@ interface Props {
   onEditingChange?: (isEditing: boolean) => void
 }
 
-const EditableText = forwardRef((props: Props, ref: any) => {
+const EditableText = forwardRef((props: Props, ref: React.Ref<HTMLDivElement>) => {
   const {
     initialValue,
     error,
@@ -137,10 +51,6 @@ const EditableText = forwardRef((props: Props, ref: any) => {
 
   const setEditing = (isEditing: boolean) => {
     setIsEditing(isEditing)
-    if (isEditing) {
-      // Pre-calculate width when entering edit mode
-      setTimeout(calculateWidth, 0)
-    }
     setAutoFocus(false)
     onEditingChange?.(isEditing)
   }
@@ -150,9 +60,11 @@ const EditableText = forwardRef((props: Props, ref: any) => {
     setValue(initialValue)
   }, [initialValue])
 
-  useEffect(() => {
+  const showEditing = (error || isEditing || autoFocus) && !disabled
+
+  useLayoutEffect(() => {
     calculateWidth()
-  }, [value])
+  }, [value, showEditing])
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const nextValue = e.target.value || ''
@@ -197,11 +109,9 @@ const EditableText = forwardRef((props: Props, ref: any) => {
     }
   }
 
-  const showEditing = (error || isEditing || autoFocus) && !disabled
   if (showEditing) {
-    const inProps = {
+    const commonProps = {
       autoFocus: true,
-      ref: inputRef as any,
       maxLength,
       onBlur: onSubmit,
       onChange: onChange,
@@ -209,37 +119,75 @@ const EditableText = forwardRef((props: Props, ref: any) => {
       onKeyDown: onKeyDown,
       placeholder,
       value,
-      style: {width: inputWidth ? `${inputWidth}px` : 'auto'}
-    } as const
+      ref: inputRef as any
+    }
+
     return (
       <div className={className} ref={ref}>
-        <Form onSubmit={onSubmit}>
+        <form
+          className={cn(
+            'relative m-0 items-center border-0 p-0',
+            isWrap ? 'flex w-full' : 'inline-flex'
+          )}
+          onSubmit={onSubmit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              onSubmit(e)
+            }
+          }}
+        >
           {isWrap ? (
-            <TextArea {...inProps} maxRows={3} />
+            <TextAreaAutoSize
+              {...commonProps}
+              className='block w-full resize-none border-0 bg-transparent p-0 text-fg-primary outline-none'
+              maxRows={3}
+              style={{width: undefined}}
+            />
           ) : (
             <>
-              <Input {...inProps} />
-              <HiddenSpan ref={spanRef}>{value || placeholder}</HiddenSpan>
+              <input
+                {...commonProps}
+                className='inline-block w-auto min-w-[50px] border-0 bg-transparent px-0.5 py-0 text-fg-primary outline-none'
+                style={{width: !inputWidth ? 'auto' : `${inputWidth}px`}}
+              />
+              <span className='invisible absolute h-0 whitespace-pre' ref={spanRef}>
+                {value || placeholder}
+              </span>
             </>
           )}
-          {error && <Error>{error}</Error>}
-        </Form>
+          {error && <div className='text-[14px] text-fg-error'>{error}</div>}
+        </form>
       </div>
     )
   }
   const showPlaceholder = !value && placeholder
   return (
     <div className={className} ref={ref}>
-      <StaticBlock
-        disabled={disabled}
+      <div
+        className={cn(
+          'inline-flex items-center gap-1 font-sans',
+          disabled ? 'cursor-default outline-none' : 'cursor-pointer hover:opacity-50'
+        )}
+        role='button'
         tabIndex={0}
         onFocus={() => setEditing(true)}
-        onClick={() => setEditing(true)}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return
+          e.preventDefault()
+          setEditing(true)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setEditing(true)
+          }
+        }}
       >
-        {showPlaceholder && <Placeholder>{placeholder}</Placeholder>}
-        {value && <StaticValue>{value}</StaticValue>}
-        {!hideIcon && !disabled && <StyledIcon />}
-      </StaticBlock>
+        {showPlaceholder && <div className='text-fg-secondary'>{placeholder}</div>}
+        {value && <div className='text-fg-primary'>{value}</div>}
+        {!hideIcon && !disabled && <Edit className='ml-2 h-[18px] w-[18px] text-fg-secondary' />}
+      </div>
     </div>
   )
 })

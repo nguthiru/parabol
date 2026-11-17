@@ -2,18 +2,22 @@ import type DataLoader from 'dataloader'
 import * as aiLoaderMakers from './aiLoaderMakers'
 import * as atlassianLoaders from './atlassianLoaders'
 import * as azureDevOpsLoaders from './azureDevOpsLoaders'
+import * as clickUpLoaders from './clickUpLoaders'
 import * as customLoaderMakers from './customLoaderMakers'
 import DataLoaderCache from './DataLoaderCache'
 import * as foreignKeyLoaderMakers from './foreignKeyLoaderMakers'
-import * as gcalLoaders from './gcalLoaders'
+import * as freshAuthLoaders from './freshAuthLoaders'
 import * as githubLoaders from './githubLoaders'
-import * as gitlabLoaders from './gitlabLoaders'
 import * as integrationAuthLoaders from './integrationAuthLoaders'
+import * as integrationDimensionFieldMapLoaders from './integrationDimensionFieldMapLoaders'
+import * as integrationIssueLoaders from './integrationIssueLoaders'
+import * as integrationSearchQueryLoaders from './integrationSearchQueryLoaders'
+import * as integrationUsageLoaders from './integrationUsageLoaders'
 import * as jiraServerLoaders from './jiraServerLoaders'
-import * as linearLoaders from './linearLoaders'
 import * as pageLoaderMakers from './pageLoaderMakers'
 import * as pollLoaders from './pollsLoaders'
 import * as primaryKeyLoaderMakers from './primaryKeyLoaderMakers'
+import * as reportLoaderMakers from './reportLoaderMakers'
 import * as teamLoaderMakers from './teamLoaderMakers'
 
 interface LoaderDict {
@@ -31,15 +35,20 @@ const loaderMakers = {
   ...atlassianLoaders,
   ...jiraServerLoaders,
   ...githubLoaders,
-  ...gitlabLoaders,
-  ...gcalLoaders,
+  ...freshAuthLoaders,
   ...integrationAuthLoaders,
+  ...integrationDimensionFieldMapLoaders,
+  ...integrationIssueLoaders,
+  ...integrationSearchQueryLoaders,
+  ...integrationUsageLoaders,
   ...pollLoaders,
   ...azureDevOpsLoaders,
-  ...linearLoaders
+  ...clickUpLoaders,
+  ...reportLoaderMakers
 } as const
 
-export type Loaders = keyof typeof loaderMakers
+export type LoaderTypes = typeof loaderMakers
+export type Loaders = keyof LoaderTypes
 
 export type AllPrimaryLoaders = keyof typeof primaryKeyLoaderMakers
 
@@ -53,7 +62,7 @@ interface GenericDataLoader<TLoaders, TPrimaryLoaderNames> {
   ): Loader extends (...args: any[]) => any ? ReturnType<Loader> : never
 }
 
-export type DataLoaderInstance = GenericDataLoader<typeof loaderMakers, AllPrimaryLoaders>
+export type DataLoaderInstance = GenericDataLoader<LoaderTypes, AllPrimaryLoaders>
 
 /**
  * This is the main dataloader
@@ -79,7 +88,7 @@ export default class RootDataLoader<
   get: DataLoaderInstance['get'] = (loaderName) => {
     let loader = this.loaders[loaderName]
     if (loader) return loader
-    const loaderMaker = loaderMakers[loaderName as keyof typeof loaderMakers]
+    const loaderMaker = loaderMakers[loaderName as keyof LoaderTypes]
     const dependsOn: RegisterDependsOn = (inPrimaryLoaders) => {
       const primaryLoaders = Array.isArray(inPrimaryLoaders) ? inPrimaryLoaders : [inPrimaryLoaders]
       primaryLoaders.forEach((primaryLoader) => {

@@ -1,4 +1,5 @@
 import base64url from 'base64url'
+import {GraphQLError} from 'graphql'
 import getSSODomainFromEmail from 'parabol-client/utils/getSSODomainFromEmail'
 import querystring from 'querystring'
 import * as samlify from 'samlify'
@@ -7,6 +8,7 @@ import adjustUserCount from '../../../billing/helpers/adjustUserCount'
 import AuthToken from '../../../database/types/AuthToken'
 import User from '../../../database/types/User'
 import generateUID from '../../../generateUID'
+import {logins} from '../../../metricsHandler'
 import {USER_PREFERRED_NAME_LIMIT} from '../../../postgres/constants'
 import getKysely from '../../../postgres/getKysely'
 import {getUserByEmail} from '../../../postgres/queries/getUsersByEmails'
@@ -14,8 +16,9 @@ import encodeAuthToken from '../../../utils/encodeAuthToken'
 import {isSingleTenantSSO} from '../../../utils/getSAMLURLFromEmail'
 import {getSSOMetadataFromURL} from '../../../utils/getSSOMetadataFromURL'
 import logError from '../../../utils/logError'
+import {annotateLogContext} from '../../../utils/requestLogContext'
+import {consumeSAMLMetadataChangeRequest} from '../../../utils/samlMetadataChangeRequest'
 import {samlXMLValidator} from '../../../utils/samlXMLValidator'
-import standardError from '../../../utils/standardError'
 import bootstrapNewUser from '../../mutations/helpers/bootstrapNewUser'
 import getSignOnURL from '../../public/mutations/helpers/SAMLHelpers/getSignOnURL'
 import type {SSORelayState} from '../../public/queries/SAMLIdP'
@@ -42,44 +45,59 @@ const getRelayState = (body: querystring.ParsedUrlQuery) => {
   return relayState
 }
 
-const getUserByEmailOrPersistentUserId = async (
+const getUserByEmailOrPersistentNameId = async (
   email: string,
-  persistentUserId: string | undefined,
+  persistentNameId: string | undefined,
   domains: string[]
 ) => {
   const user = await getUserByEmail(email)
   if (user) return user
-  if (!persistentUserId) return null
+  if (!persistentNameId) return null
   const pg = getKysely()
-  const userByPersistentUserId = await pg
+  const userByPersistentNameId = await pg
     .selectFrom('User')
     .selectAll()
-    .where('persistentUserId', '=', persistentUserId)
+    .where('persistentNameId', '=', persistentNameId)
     .limit(1)
     .executeTakeFirst()
-  if (!userByPersistentUserId) return null
+  if (!userByPersistentNameId) return null
   // Do not blindly trust the IdP. Verify that it has control over the email address
-  const ssoDomain = getSSODomainFromEmail(userByPersistentUserId.email)
+  const ssoDomain = getSSODomainFromEmail(userByPersistentNameId.email)
   if (!isSingleTenantSSO && (!ssoDomain || !domains.includes(ssoDomain))) {
     // don't blindly trust the IdP unless there is only 1
-    return new Error(`${userByPersistentUserId.email} does not belong to ${domains.join(', ')}`)
+    return new Error(`${userByPersistentNameId.email} does not belong to ${domains.join(', ')}`)
   }
   // At this point we can trust that the IdP controls this account and has changed the users email address
-  await pg.updateTable('User').set({email}).where('id', '=', userByPersistentUserId.id).execute()
-  return userByPersistentUserId
+  await pg.updateTable('User').set({email}).where('id', '=', userByPersistentNameId.id).execute()
+  return userByPersistentNameId
 }
 
 const loginSAML: MutationResolvers['loginSAML'] = async (
   _source,
   {samlName, queryString},
-  {dataLoader}
+  context
 ) => {
+  const {dataLoader} = context
   const pg = getKysely()
 
   const normalizedName = samlName.trim().toLowerCase()
   const body = querystring.parse(queryString)
   const relayState = getRelayState(body)
-  const {metadataURL: newMetadataURL, isInvited} = relayState
+  const {metadataChangeId, isInvited} = relayState
+  const metadataChange = metadataChangeId
+    ? await consumeSAMLMetadataChangeRequest(metadataChangeId)
+    : null
+  if (metadataChangeId && !metadataChange) {
+    throw new GraphQLError('The metadata update request has expired. Please try again.', {
+      extensions: {code: 'CONFLICT'}
+    })
+  }
+  if (metadataChange && metadataChange.samlId !== normalizedName) {
+    throw new GraphQLError('The metadata update request is for a different SSO connection.', {
+      extensions: {code: 'BAD_USER_INPUT'}
+    })
+  }
+  const newMetadataURL = metadataChange?.metadataURL
   const doc = await dataLoader.get('saml').load(normalizedName)
   dataLoader.get('saml').clear(normalizedName)
 
@@ -87,17 +105,14 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
     // Often the SAML Domain is confused with the email domain, so let's check that and give a helpful error
     const saml = await dataLoader.get('samlByDomain').load(normalizedName)
     if (saml) {
-      return {
-        error: {
-          message: `SSO is enabled for ${normalizedName} but the SAML Entity IDs do not match. Please check your IdP's settings.`
-        }
-      }
+      throw new GraphQLError(
+        `SSO is enabled for ${normalizedName} but the SAML Entity IDs do not match. Please check your IdP's settings.`,
+        {extensions: {code: 'NOT_FOUND'}}
+      )
     }
-    return {
-      error: {
-        message: `Ask customer service to enable SSO for ${normalizedName}.`
-      }
-    }
+    throw new GraphQLError(`Ask customer service to enable SSO for ${normalizedName}.`, {
+      extensions: {code: 'NOT_FOUND'}
+    })
   }
   const {
     domains,
@@ -106,6 +121,9 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
     orgId,
     samlOrgAttribute
   } = doc
+  if (orgId) {
+    annotateLogContext({orgId})
+  }
 
   const shouldRefresh = shouldRefreshMetadata(doc)
   const fetchMetadataUrl = newMetadataURL || (shouldRefresh ? existingMetadataURL : null)
@@ -118,13 +136,13 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
 
   const newMetadata = fetchMetadataUrl ? await getSSOMetadataFromURL(fetchMetadataUrl) : undefined
   if (newMetadata instanceof Error) {
-    return standardError(newMetadata)
+    throw new GraphQLError(newMetadata.message, {extensions: {code: 'SERVICE_UNAVAILABLE'}})
   }
   const metadata = newMetadata || existingMetadata
   if (!metadata) {
-    return {
-      error: {message: 'No metadata found! Please contact customer service'}
-    }
+    throw new GraphQLError('No metadata found! Please contact customer service', {
+      extensions: {code: 'NOT_FOUND'}
+    })
   }
   const idp = samlify.IdentityProvider({metadata})
   let loginResponse
@@ -133,20 +151,19 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
       body
     })
   } catch (e) {
-    if (e instanceof Error) {
-      return standardError(e)
-    }
-    const message = typeof e === 'string' ? e : 'parseLoginResponse failed'
-    return standardError(new Error(message), {extras: {body}})
+    const message =
+      e instanceof Error ? e.message : typeof e === 'string' ? e : 'parseLoginResponse failed'
+    throw new GraphQLError(message, {extensions: {code: 'BAD_USER_INPUT'}})
   }
   if (!loginResponse) {
-    return standardError(new Error('Error with query from identity provider'), {
-      extras: {body}
+    throw new GraphQLError('Error with query from identity provider', {
+      extensions: {code: 'BAD_USER_INPUT'}
     })
   }
 
   const {extract} = loginResponse
-  const {attributes, nameID} = extract
+  const attributes = extract.attributes ?? {}
+  const nameID = extract.nameID!
   const normalizedAttributes = Object.fromEntries(
     Object.entries(attributes).map(([key, value]) => {
       const normalizedKey = CLAIM_SPEC[key as keyof typeof CLAIM_SPEC] ?? key.toLowerCase()
@@ -163,39 +180,58 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
     emailaddress,
     displayname,
     name,
-    persistentuserid
+    persistentuserid,
+    persistentnameid
   } = normalizedAttributes
   const preferredName = displayname || name || nameID
-  const persistentUserId = persistentuserid || nameID
+  const persistentNameId = persistentnameid || persistentuserid || nameID
   const email = inputEmail?.toLowerCase() || emailaddress?.toLowerCase()
   if (!email) {
-    return standardError(
-      new Error(
-        `Email attribute is missing from the SAML response. The following attributes were included: ${Object.keys(attributes).join(', ')}`
-      ),
-      {extras: {attributes}}
+    throw new GraphQLError(
+      `Email attribute is missing from the SAML response. The following attributes were included: ${Object.keys(attributes).join(', ') || '<None>'}`,
+      {extensions: {code: 'BAD_USER_INPUT'}}
     )
   }
   if (email.length > USER_PREFERRED_NAME_LIMIT) {
-    return {error: {message: 'Email is too long'}}
+    throw new GraphQLError('Email is too long', {extensions: {code: 'BAD_USER_INPUT'}})
   }
   const ssoDomain = getSSODomainFromEmail(email)
   if (!ssoDomain || !domains.includes(ssoDomain)) {
     if (!isSingleTenantSSO) {
       // don't blindly trust the IdP unless there is only 1
-      return standardError(new Error(`${email} does not belong to ${domains.join(', ')}`), {
-        extras: {attributes}
+      throw new GraphQLError(`${email} does not belong to ${domains.join(', ')}`, {
+        extensions: {code: 'FORBIDDEN'}
       })
     }
   }
 
+  const user = await getUserByEmailOrPersistentNameId(email, persistentNameId, domains)
+  if (user instanceof Error) throw new GraphQLError(user.message, {extensions: {code: 'FORBIDDEN'}})
+
   if (newMetadata) {
-    // The user is updating their SAML metadata
-    // Revalidate it & persist to DB
+    // A metadata change is confirmed by the org admin who requested it signing in through the new IdP.
+    // Refreshing the stored URL (auto) is allowed on every login.
+    if (metadataChange) {
+      if (!orgId || !user || user.id !== metadataChange.requestedBy) {
+        throw new GraphQLError(
+          'Only the org admin who requested the metadata update can confirm it',
+          {extensions: {code: 'FORBIDDEN'}}
+        )
+      }
+      const organizationUser = await dataLoader
+        .get('organizationUsersByUserIdOrgId')
+        .load({orgId, userId: user.id})
+      if (organizationUser?.role !== 'ORG_ADMIN') {
+        throw new GraphQLError('Only org admins can update SAML metadata', {
+          extensions: {code: 'FORBIDDEN'}
+        })
+      }
+    }
+    // Revalidate metadata & persist to DB
     // Generate the URL to verify the metadata, don't persist it as it needs to be generated fresh
     const url = getSignOnURL(metadata, normalizedName)
     if (url instanceof Error) {
-      return standardError(url)
+      throw new GraphQLError(url.message, {extensions: {code: 'BAD_USER_INPUT'}})
     }
     await pg
       .updateTable('SAML')
@@ -204,15 +240,16 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
       .execute()
   }
 
-  const user = await getUserByEmailOrPersistentUserId(email, persistentUserId, domains)
-  if (user instanceof Error) return standardError(user)
   if (user) {
-    if (persistentUserId && !user.persistentUserId) {
-      await pg.updateTable('User').set({persistentUserId}).where('id', '=', user.id).execute()
+    if (persistentNameId && !user.persistentNameId) {
+      await pg.updateTable('User').set({persistentNameId}).where('id', '=', user.id).execute()
     }
+    const tms = await dataLoader.get('teamIdsByUserId').load(user.id)
+    context.authToken = new AuthToken({sub: user.id, tms, rol: user.rol})
+    logins.inc({method: 'saml'})
     return {
       userId: user.id,
-      authToken: encodeAuthToken(new AuthToken({sub: user.id, tms: user.tms, rol: user.rol})),
+      authToken: encodeAuthToken(context.authToken),
       isNewUser: false
     }
   }
@@ -260,16 +297,17 @@ const loginSAML: MutationResolvers['loginSAML'] = async (
     orgIds.push(orgId)
   }
 
-  const isOrganic = orgIds.length > 0 && !isInvited
-  const authToken = await bootstrapNewUser(tempUser, !isOrganic, dataLoader)
+  const isOrganic = orgIds.length === 0 && !isInvited
+  context.authToken = await bootstrapNewUser(tempUser, isOrganic, dataLoader)
 
   await Promise.all(
     orgIds.map((orgId) => adjustUserCount(userId, orgId, InvoiceItemType.ADD_USER, dataLoader))
   )
 
+  logins.inc({method: 'saml'})
   return {
     userId,
-    authToken: encodeAuthToken(authToken),
+    authToken: encodeAuthToken(context.authToken),
     isNewUser: true
   }
 }

@@ -1,15 +1,9 @@
-import styled from '@emotion/styled'
 import {useEffect, useRef} from 'react'
 import {commitLocalUpdate} from 'relay-runtime'
 import useAtmosphere from '../../hooks/useAtmosphere'
-import {ElementWidth} from '../../types/constEnums'
 import type {RefCallbackInstance} from '../../types/generics'
 import type {OpenSpotlight} from '../GroupingKanbanColumn'
 import DraggableReflectionCard from '../ReflectionGroup/DraggableReflectionCard'
-
-const ModalReflectionWrapper = styled('div')({
-  padding: ElementWidth.REFLECTION_CARD_PADDING
-})
 
 interface Props {
   idx: number
@@ -26,11 +20,13 @@ const ExpandedReflection = (props: Props) => {
   const {id: reflectionId} = reflection
   const staticIdx = staticReflections.indexOf(reflection)
   const atmosphere = useAtmosphere()
+  const watchForClickRef = useRef<((e: MouseEvent) => void) | null>(null)
   const setIsEditing = (reflectionId: string) => () => {
     const watchForClick = (e: MouseEvent) => {
       const isClickOnCard = e.composedPath().find((el) => el === cardRef.current)
       if (!isClickOnCard) {
         document.removeEventListener('click', watchForClick)
+        watchForClickRef.current = null
         commitLocalUpdate(atmosphere, (store) => {
           const reflection = store.get(reflectionId)
           if (!reflection) return
@@ -38,6 +34,10 @@ const ExpandedReflection = (props: Props) => {
         })
       }
     }
+    if (watchForClickRef.current) {
+      document.removeEventListener('click', watchForClickRef.current)
+    }
+    watchForClickRef.current = watchForClick
     document.addEventListener('click', watchForClick)
     commitLocalUpdate(atmosphere, (store) => {
       const reflection = store.get(reflectionId)
@@ -45,13 +45,17 @@ const ExpandedReflection = (props: Props) => {
       reflection.setValue(true, 'isEditing')
     })
   }
-  const cardRef = useRef<HTMLDivElement>()
+  const cardRef = useRef<HTMLDivElement>(undefined)
   const setRef = (c: HTMLDivElement) => {
     setItemsRef(idx)(c)
     cardRef.current = c
   }
   useEffect(() => {
     return () => {
+      if (watchForClickRef.current) {
+        document.removeEventListener('click', watchForClickRef.current)
+        watchForClickRef.current = null
+      }
       commitLocalUpdate(atmosphere, (store) => {
         const reflection = store.get(reflectionId)
         if (!reflection) return
@@ -61,7 +65,8 @@ const ExpandedReflection = (props: Props) => {
   }, [])
   if (staticIdx === -1) return null
   return (
-    <ModalReflectionWrapper
+    <div
+      className='p-1.5'
       style={{zIndex: staticReflections.length - staticIdx - 1}}
       id={reflection.id}
       ref={setRef}
@@ -69,13 +74,14 @@ const ExpandedReflection = (props: Props) => {
     >
       <DraggableReflectionCard
         isDraggable
+        isExpanded
         meeting={meeting}
         openSpotlight={openSpotlight}
         reflection={reflection}
         staticIdx={staticIdx}
         staticReflections={staticReflections}
       />
-    </ModalReflectionWrapper>
+    </div>
   )
 }
 

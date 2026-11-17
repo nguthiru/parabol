@@ -1,27 +1,10 @@
-import styled from '@emotion/styled'
 import * as React from 'react'
 import {forwardRef, type Ref} from 'react'
-import makeFieldColorPalette from '../../styles/helpers/makeFieldColorPalette'
-import ui from '../../styles/ui'
+import {cn} from '../../ui/cn'
 import StyledError from '../StyledError'
 
-const Input = styled('input')<{disabled: boolean}>(
-  ({disabled}) => ({
-    ...ui.fieldBaseStyles,
-    ...ui.fieldSizeStyles.medium,
-    ...makeFieldColorPalette('white', !disabled)
-  }),
-  ({disabled}) => disabled && {...ui.fieldDisabled}
-)
-
-const Error = styled(StyledError)({
-  fontSize: 13,
-  textAlign: 'left',
-  width: '100%'
-})
-
 interface Props {
-  autoComplete?: 'off'
+  autoComplete?: 'off' | 'new-password'
   autoFocus?: boolean
   className?: string
   disabled?: boolean
@@ -30,6 +13,7 @@ interface Props {
   onBlur?: (e: React.FocusEvent<HTMLInputElement>) => void
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void
   onFocus?: (e: React.FocusEvent<HTMLInputElement>) => void
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void
   placeholder?: string
   spellCheck?: boolean
   type?: string
@@ -48,6 +32,7 @@ const BasicInput = forwardRef((props: Props, ref: Ref<HTMLInputElement>) => {
     onBlur,
     onChange,
     onFocus,
+    onKeyDown,
     placeholder,
     spellCheck,
     type = 'text',
@@ -56,11 +41,17 @@ const BasicInput = forwardRef((props: Props, ref: Ref<HTMLInputElement>) => {
   } = props
   return (
     <React.Fragment>
-      <Input
+      <input
         readOnly={readOnly}
         autoComplete={autoComplete}
         autoFocus={autoFocus}
-        className={className}
+        className={cn(
+          'm-0 block w-full appearance-none rounded-[4px] border border-hairline-field bg-surface-input px-[11px] py-[7px] font-sans text-[15px] text-fg-primary leading-6 outline-none selection:bg-hairline-strong placeholder:text-fg-muted',
+          disabled
+            ? 'cursor-not-allowed opacity-50'
+            : 'hover:border-fg-primary focus:border-fg-primary active:border-fg-primary',
+          className
+        )}
         disabled={Boolean(disabled)}
         ref={ref}
         name={name}
@@ -68,11 +59,12 @@ const BasicInput = forwardRef((props: Props, ref: Ref<HTMLInputElement>) => {
         onBlur={onBlur}
         onChange={onChange}
         onFocus={onFocus}
+        onKeyDown={onKeyDown}
         spellCheck={spellCheck}
         type={type}
         value={value}
       />
-      {error && <Error>{error}</Error>}
+      {error && <StyledError className='w-full text-[13px]'>{error}</StyledError>}
     </React.Fragment>
   )
 })

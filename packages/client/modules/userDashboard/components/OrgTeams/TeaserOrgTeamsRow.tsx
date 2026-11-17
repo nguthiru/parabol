@@ -1,5 +1,5 @@
-import {Lock} from '@mui/icons-material'
-import {useHistory} from 'react-router'
+import {useNavigate} from 'react-router'
+import {Lock} from '~/ui/icons'
 import plural from '../../../../utils/plural'
 
 type Props = {
@@ -9,10 +9,10 @@ type Props = {
 
 const TeaserOrgTeamsRow = (props: Props) => {
   const {hiddenTeamCount, orgId} = props
-  const history = useHistory()
+  const navigate = useNavigate()
 
   const handleParabolEnterpriseClick = () => {
-    history.push(`/me/organizations/${orgId}/billing`)
+    navigate(`/me/organizations/${orgId}/billing`)
   }
 
   return (
@@ -23,11 +23,11 @@ const TeaserOrgTeamsRow = (props: Props) => {
             {hiddenTeamCount} {plural(hiddenTeamCount, 'Hidden Team')}
           </div>
           <div className='flex items-center justify-between'>
-            <div className='text-gray-600'>
+            <div className='text-fg-secondary'>
               <a
                 href='#'
                 onClick={handleParabolEnterpriseClick}
-                className='font-bold text-sky-500 hover:text-sky-600'
+                className='font-bold text-accent hover:text-sky-600'
               >
                 Parabol Enterprise
               </a>{' '}
@@ -38,7 +38,7 @@ const TeaserOrgTeamsRow = (props: Props) => {
         </div>
         <div className='flex items-center justify-center'>
           <div className='flex h-8 w-6 flex-row items-center py-2'>
-            <Lock className='h-6 w-6 text-slate-600' />
+            <Lock className='h-6 w-6 text-fg-secondary' />
           </div>
         </div>
       </div>

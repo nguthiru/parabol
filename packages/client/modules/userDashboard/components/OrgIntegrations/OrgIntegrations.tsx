@@ -1,7 +1,7 @@
 import graphql from 'babel-plugin-relay/macro'
 import {Suspense} from 'react'
 import {useFragment} from 'react-relay'
-import {useHistory} from 'react-router'
+import {useNavigate} from 'react-router'
 import type {OrgIntegrations_organization$key} from '../../../../__generated__/OrgIntegrations_organization.graphql'
 import {Loader} from '../../../../utils/relay/renderLoader'
 import GitLabProviders from './GitLabProviders'
@@ -36,7 +36,7 @@ const OrgIntegrations = (props: Props) => {
   )
 
   const {id: orgId, viewerOrganizationUser, organizationUsers} = organization
-  const history = useHistory()
+  const navigate = useNavigate()
   const isOrgAdmin = viewerOrganizationUser?.role === 'ORG_ADMIN'
 
   const orgUsers = organizationUsers?.edges.map((edge) => edge.node)
@@ -48,18 +48,18 @@ const OrgIntegrations = (props: Props) => {
         <div className='w-[768px] max-w-[768px]'>
           <h1>Integration Settings</h1>
           {isOrgAdmin ? (
-            <div className='text-base text-slate-700'>
+            <div className='text-base text-fg-primary'>
               Configure organization-level integrations that can be used by teams across your
               organization.
               <br />
               See the team integration tab for team-level connections.
             </div>
           ) : (
-            <div className='text-slate-700'>
+            <div className='text-fg-primary'>
               {`Organization-level integrations are managed by `}
               <a
                 href='https://www.parabol.co/support/roles-on-parabol'
-                className='font-bold text-sky-500 hover:text-sky-600'
+                className='font-bold text-accent hover:text-sky-600'
                 target='_blank'
                 rel='noopener'
               >
@@ -70,8 +70,8 @@ const OrgIntegrations = (props: Props) => {
                 <>
                   {` View yours `}
                   <button
-                    onClick={() => history.push(`/me/organizations/${orgId}/billing`)}
-                    className='cursor-pointer bg-transparent p-0 font-bold text-sky-500 hover:text-sky-600'
+                    onClick={() => navigate(`/me/organizations/${orgId}/billing`)}
+                    className='cursor-pointer bg-transparent p-0 font-bold text-accent hover:text-sky-600'
                   >
                     here
                   </button>

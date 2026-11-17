@@ -10,22 +10,27 @@ import useMeeting from '../hooks/useMeeting'
 import type LocalAtmosphere from '../modules/demo/LocalAtmosphere'
 import NewMeetingAvatarGroup from '../modules/meeting/components/MeetingAvatarGroup/NewMeetingAvatarGroup'
 import {RetroDemo} from '../types/constEnums'
-import lazyPreload, {type LazyExoticPreload} from '../utils/lazyPreload'
+import lazyPreload, {type LazyPreloadedComponent} from '../utils/lazyPreload'
+import reportMissingMeetingPhase from '../utils/meetings/reportMissingMeetingPhase'
 import MeetingControlBar from './MeetingControlBar'
 import MeetingLockedOverlay from './MeetingLockedOverlay'
 import MeetingStyles from './MeetingStyles'
 import ResponsiveDashSidebar from './ResponsiveDashSidebar'
+import RetroInspirationDrawer from './RetroInspirationDrawer'
 import RetroMeetingSidebar from './RetroMeetingSidebar'
 
 interface Props {
   meeting: RetroMeeting_meeting$key
 }
 
-const phaseLookup = {
+const phaseLookup: Partial<Record<NewMeetingPhaseTypeEnum, LazyPreloadedComponent>> = {
   checkin: lazyPreload(
     () => import(/* webpackChunkName: 'NewMeetingCheckIn' */ './NewMeetingCheckIn')
   ),
   TEAM_HEALTH: lazyPreload(() => import(/* webpackChunkName: 'TeamHealth' */ './TeamHealth')),
+  updates: lazyPreload(
+    () => import(/* webpackChunkName: 'RetroMeetingUpdates' */ './RetroMeetingUpdates')
+  ),
   reflect: lazyPreload(
     () =>
       import(/* webpackChunkName: 'RetroReflectPhase' */ './RetroReflectPhase/RetroReflectPhase')
@@ -35,7 +40,7 @@ const phaseLookup = {
   discuss: lazyPreload(
     () => import(/* webpackChunkName: 'RetroDiscussPhase' */ './RetroDiscussPhase')
   )
-} as Record<NewMeetingPhaseTypeEnum, LazyExoticPreload<any>>
+}
 
 export interface RetroMeetingPhaseProps {
   toggleSidebar: () => void
@@ -50,13 +55,16 @@ const RetroMeeting = (props: Props) => {
       fragment RetroMeeting_meeting on RetrospectiveMeeting {
         ...MeetingControlBar_meeting
         ...useMeeting_meeting
+        ...reportMissingMeetingPhase_meeting
         ...RetroMeetingSidebar_meeting
         ...NewMeetingCheckIn_meeting
         ...TeamHealth_meeting
+        ...RetroMeetingUpdates_meeting
         ...RetroReflectPhase_meeting
         ...RetroGroupPhase_meeting
         ...RetroVotePhase_meeting
         ...RetroDiscussPhase_meeting
+        ...RetroInspirationDrawer_meeting
         ...NewMeetingAvatarGroup_meeting
         ...MeetingLockedOverlay_meeting
         id
@@ -80,7 +88,15 @@ const RetroMeeting = (props: Props) => {
   if (!safeRoute) return null
   const {id: meetingId, showSidebar, localPhase} = meeting
   const localPhaseType = localPhase?.phaseType
-  const Phase = phaseLookup[localPhaseType]
+  const Phase = phaseLookup[localPhaseType]!
+  if (!Phase) reportMissingMeetingPhase('RetroMeeting', meeting)
+  // The inspiration drawer is shared by the reflect & group phases. Render it here, above the
+  // swapped Phase component, so it stays mounted across the reflect <-> group transition and
+  // doesn't flicker. Hidden in the demo: the mock DB doesn't serve inspirationItems (or the
+  // drawer's other fields), and drafting reflections can't work against the mock server anyway.
+  const showInspirationDrawer =
+    (localPhaseType === 'reflect' || localPhaseType === 'group') &&
+    meetingId !== RetroDemo.MEETING_ID
 
   const isDemoStageComplete =
     meetingId === RetroDemo.MEETING_ID
@@ -104,6 +120,7 @@ const RetroMeeting = (props: Props) => {
           avatarGroup={<NewMeetingAvatarGroup meetingRef={meeting} />}
         />
       </Suspense>
+      {showInspirationDrawer && <RetroInspirationDrawer meeting={meeting} />}
       <MeetingControlBar
         isDemoStageComplete={isDemoStageComplete}
         meeting={meeting}

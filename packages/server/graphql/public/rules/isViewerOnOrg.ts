@@ -1,18 +1,41 @@
-import {GraphQLError} from 'graphql'
+import {GraphQLError, type GraphQLResolveInfo} from 'graphql'
 import {rule} from 'graphql-shield'
+import type {AllPrimaryLoaders} from '../../../dataloader/RootDataLoader'
 import {getUserId} from '../../../utils/authorization'
-import type {GQLContext} from '../../graphql'
-import {getResolverDotPath, type ResolverDotPath} from './getResolverDotPath'
+import type {RuleContext} from '../../graphql'
+import {cacheByDotPath, getResolverDotPath, type ResolverDotPath} from './getResolverDotPath'
 
-export const isViewerOnOrg = <T>(orgIdDotPath: ResolverDotPath<T>) =>
-  rule(`isViewerOnOrg-${orgIdDotPath}`, {cache: 'strict'})(
-    async (source, args, {authToken, dataLoader}: GQLContext) => {
-      const orgId = getResolverDotPath(orgIdDotPath, source, args)
+export const isViewerOnOrg = <T>(
+  orgIdDotPath: ResolverDotPath<T>,
+  dataLoaderName?: AllPrimaryLoaders
+) =>
+  rule(`isViewerOnOrg-${dataLoaderName ?? ''}`, {cache: cacheByDotPath(orgIdDotPath)})(
+    async (source, args, context: RuleContext, info: GraphQLResolveInfo) => {
+      const {authToken, dataLoader} = context
+      const argVar = getResolverDotPath(orgIdDotPath, source, args)
+      let orgId: string = argVar
+      if (dataLoaderName) {
+        const subject = await dataLoader.get(dataLoaderName as any).load(argVar)
+        if (!subject?.orgId)
+          return new GraphQLError(`Permission lookup failed on ${dataLoaderName} for ${argVar}`, {
+            extensions: {code: 'NOT_FOUND'}
+          })
+        orgId = subject.orgId
+      }
+      // Special case for ghost org so users can view meeting template meta
+      if (info.operation.operation !== 'mutation' && orgId === 'aGhostOrg') return true
+
       const viewerId = getUserId(authToken)
       const organizationUser = await dataLoader
         .get('organizationUsersByUserIdOrgId')
         .load({orgId, userId: viewerId})
-      if (!organizationUser) return new GraphQLError('Viewer is not on Organization')
+      if (!organizationUser)
+        return new GraphQLError('Viewer is not on Organization', {extensions: {code: 'FORBIDDEN'}})
+      if (context.resourceGrants && !(await context.resourceGrants.hasOrg(orgId))) {
+        return new GraphQLError(`PAT does not grant access to this organization`, {
+          extensions: {code: 'FORBIDDEN'}
+        })
+      }
       return true
     }
   )

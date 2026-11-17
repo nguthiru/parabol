@@ -6,9 +6,11 @@ interface MenuProps extends DropdownMenu.DropdownMenuProps {
   trigger: React.ReactNode
 }
 
-export const Menu: React.FC<MenuProps> = ({trigger, children, ...props}) => {
+export const Menu = ({trigger, children, ...props}: MenuProps) => {
   return (
-    <DropdownMenu.Root {...props}>
+    // modal would render a dismiss layer over the page, so the click that closes the
+    // menu gets swallowed instead of landing on whatever was clicked
+    <DropdownMenu.Root modal={false} {...props}>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>{children}</DropdownMenu.Portal>
     </DropdownMenu.Root>

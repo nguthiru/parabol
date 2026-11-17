@@ -1,9 +1,9 @@
 import graphql from 'babel-plugin-relay/macro'
 import type {mapMentionedToToast_notification$data} from '../../__generated__/mapMentionedToToast_notification.graphql'
 import type {Snack} from '../../components/Snackbar'
-import type {OnNextHistoryContext} from '../../types/relayMutations'
-import SendClientSideEvent from '../../utils/SendClientSideEvent'
+import type {OnNextNavigateContext} from '../../types/relayMutations'
 import makeNotificationToastKey from './makeNotificationToastKey'
+import type {UnmaskedNotification} from './mapNotificationToToast'
 
 graphql`
   fragment mapMentionedToToast_notification on NotifyMentioned {
@@ -19,10 +19,9 @@ graphql`
 `
 
 const mapMentionedToToast = (
-  notification: mapMentionedToToast_notification$data,
-  {atmosphere, history}: OnNextHistoryContext
+  notification: UnmaskedNotification<mapMentionedToToast_notification$data>,
+  {navigate}: OnNextNavigateContext
 ): Snack | null => {
-  if (!notification) return null
   const {
     id: notificationId,
     senderName,
@@ -37,13 +36,11 @@ const mapMentionedToToast = (
 
   let locationType = 'their response'
   let actionLabel = 'See their response'
-  let snackbarType = 'responseMentioned'
   let actionUrl = `/meet/${meetingId}`
 
   if (retroReflection) {
     actionLabel = 'See their reflection'
     locationType = 'their reflection'
-    snackbarType = 'reflectionMentioned'
     if (retroDiscussStageIdx) {
       actionUrl = `/meet/${meetingId}/discuss/${retroDiscussStageIdx}`
     }
@@ -52,7 +49,7 @@ const mapMentionedToToast = (
   const message = `${authorName} mentioned you in ${locationType} in ${meetingName}`
 
   const goThere = () => {
-    history.push(actionUrl)
+    navigate(actionUrl)
   }
 
   return {
@@ -62,16 +59,6 @@ const mapMentionedToToast = (
     action: {
       label: actionLabel,
       callback: goThere
-    },
-    onShow: () => {
-      SendClientSideEvent(atmosphere, 'Snackbar Viewed', {
-        snackbarType
-      })
-    },
-    onManualDismiss: () => {
-      SendClientSideEvent(atmosphere, 'Snackbar Clicked', {
-        snackbarType
-      })
     }
   }
 }

@@ -3,10 +3,10 @@ import type {CheckInMeeting} from '../../../../postgres/types/Meeting'
 import type {InternalContext} from '../../../graphql'
 import {getAgendaItemBlocks} from './getAgendaItemBlocks'
 import {getCheckinMetaBlock} from './getCheckinMetaBlock'
+import {getCheckinSummaryTable} from './getCheckinSummaryTable'
 import {getParticipantBlocks} from './getParticipantBlocks'
 import {getSubtitleBlock} from './getSubtitleBlock'
 import {getTaskBlocks} from './getTaskBlocks'
-import {getTitleBlock} from './getTitleBlock'
 
 export const generateCheckinMeetingSummaryPage = async function* (
   meetingId: string,
@@ -16,12 +16,12 @@ export const generateCheckinMeetingSummaryPage = async function* (
   const meeting = (await dataLoader.get('newMeetings').loadNonNull(meetingId)) as CheckInMeeting
   // start the work at the same time, then deliver it in order
   const promises = [
-    getTitleBlock(meeting),
     getSubtitleBlock(meeting, dataLoader),
     getCheckinMetaBlock(meeting, dataLoader),
     getTaskBlocks(meetingId, dataLoader),
     getAgendaItemBlocks(meetingId, dataLoader),
-    getParticipantBlocks(meetingId, dataLoader)
+    getParticipantBlocks(meetingId, dataLoader),
+    getCheckinSummaryTable(meetingId, dataLoader)
   ] as Promise<JSONContent[] | null>[]
   for (const promise of promises) {
     const blocks = await promise

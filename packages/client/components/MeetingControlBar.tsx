@@ -1,6 +1,5 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
-import {useRef} from 'react'
+import {Fragment, useRef} from 'react'
 import {useFragment} from 'react-relay'
 import type {MeetingControlBar_meeting$key} from '~/__generated__/MeetingControlBar_meeting.graphql'
 import useAtmosphere from '~/hooks/useAtmosphere'
@@ -9,16 +8,12 @@ import {useCovering} from '~/hooks/useControlBarCovers'
 import useDraggableFixture from '~/hooks/useDraggableFixture'
 import type useGotoNext from '~/hooks/useGotoNext'
 import type useGotoStageId from '~/hooks/useGotoStageId'
-import useInitialRender from '~/hooks/useInitialRender'
 import useLeft from '~/hooks/useLeft'
-import useTransition, {TransitionStatus} from '~/hooks/useTransition'
-import {PALETTE} from '~/styles/paletteV3'
 import {BezierCurve, Breakpoint, ElementWidth, ZIndex} from '~/types/constEnums'
-import makeMinWidthMediaQuery from '~/utils/makeMinWidthMediaQuery'
 import findStageAfterId from '~/utils/meetings/findStageAfterId'
 import type {NewMeetingPhaseTypeEnum} from '../__generated__/MeetingControlBar_meeting.graphql'
 import useClickConfirmation from '../hooks/useClickConfirmation'
-import {bottomBarShadow, desktopBarShadow} from '../styles/elevation'
+import {cn} from '../ui/cn'
 import showTimerInPhase from '../utils/showTimerInPhase'
 import BottomControlBarMusic from './BottomControlBarMusic'
 import BottomControlBarReady from './BottomControlBarReady'
@@ -26,32 +21,6 @@ import BottomControlBarRejoin from './BottomControlBarRejoin'
 import BottomControlBarTips from './BottomControlBarTips'
 import EndMeetingButton from './EndMeetingButton'
 import StageTimerControl from './StageTimerControl'
-
-const Wrapper = styled('div')<{left: number}>(({left}) => ({
-  alignItems: 'center',
-  backgroundColor: '#FFFFFF',
-  bottom: 0,
-  boxShadow: bottomBarShadow,
-  color: PALETTE.SLATE_600,
-  display: 'flex',
-  flexWrap: 'nowrap',
-  fontSize: 14,
-  height: 56,
-  justifyContent: 'space-between',
-  left,
-  minHeight: 56,
-  padding: ElementWidth.CONTROL_BAR_PADDING,
-  position: 'fixed',
-  transition: `all 200ms ${BezierCurve.DECELERATE}`,
-  width: '100%',
-  zIndex: ZIndex.BOTTOM_BAR,
-  [makeMinWidthMediaQuery(Breakpoint.SINGLE_REFLECTION_COLUMN)]: {
-    borderRadius: 4,
-    bottom: 8,
-    boxShadow: desktopBarShadow,
-    width: 'auto'
-  }
-}))
 
 const DEFAULT_TIME_LIMIT = {
   reflect: 5,
@@ -84,8 +53,17 @@ const MeetingControlBar = (props: Props) => {
         facilitatorUserId
         meetingType
         showSidebar
+        ... on ActionMeeting {
+          rightDrawerOpen
+        }
         ... on PokerMeeting {
-          isRightDrawerOpen
+          rightDrawerOpen
+        }
+        ... on RetrospectiveMeeting {
+          rightDrawerOpen
+        }
+        ... on TeamPromptMeeting {
+          rightDrawerOpen
         }
         localStage {
           id
@@ -102,6 +80,7 @@ const MeetingControlBar = (props: Props) => {
           phaseType
           stages {
             id
+            isNavigable
           }
         }
       }
@@ -121,27 +100,30 @@ const MeetingControlBar = (props: Props) => {
     phases,
     meetingType,
     showSidebar,
-    isRightDrawerOpen = false
+    rightDrawerOpen
   } = meeting
+  const isRightDrawerOpen = rightDrawerOpen != null // derived for geometry helpers below
   const isFacilitating = facilitatorUserId === viewerId && !endedAt
   const {phaseType} = localPhase
   const {id: localStageId, isComplete} = localStage
   const isCheckIn = phaseType === 'checkin'
   const isPoker = meetingType === 'poker'
+  const nextStage = findStageAfterId(phases, localStageId)?.stage
+  // poker participants advance themselves, but only through stages the facilitator has unlocked
+  const canGotoNext = !!nextStage && (isFacilitating || (isPoker && nextStage.isNavigable))
   const getPossibleButtons = () => {
     const buttons = ['music']
     if (isFacilitating && !isComplete && showTimerInPhase(phaseType)) buttons.push('timer')
     if (isDesktop) buttons.push('tips')
     if (!isFacilitating && !isCheckIn && !isComplete && !isPoker) buttons.push('ready')
     if (!isFacilitating && localStageId !== facilitatorStageId) buttons.push('rejoin')
-    if ((isFacilitating || isPoker) && findStageAfterId(phases, localStageId)) buttons.push('next')
+    if (canGotoNext) buttons.push('next')
     if (isFacilitating) buttons.push('end')
     return buttons.map((key) => ({key}))
   }
   const buttons = getPossibleButtons()
   const [confirmingButton, setConfirmingButton] = useClickConfirmation()
   const cancelConfirm = confirmingButton ? () => setConfirmingButton('') : undefined
-  const tranChildren = useTransition(buttons)
   const controlBarWidth =
     buttons.length * ElementWidth.CONTROL_BAR_BUTTON + ElementWidth.CONTROL_BAR_PADDING * 2
   const left = useLeft(controlBarWidth, isRightDrawerOpen, showSidebar)
@@ -149,88 +131,83 @@ const MeetingControlBar = (props: Props) => {
   const {onMouseDown, onClickCapture} = useDraggableFixture(showSidebar, isRightDrawerOpen)
   const ref = useRef<HTMLDivElement>(null)
   useCovering(ref)
-  const isInit = useInitialRender()
   if (endedAt) return null
+
+  const renderButton = (key: string) => {
+    switch (key) {
+      case 'music':
+        return <BottomControlBarMusic key={key} meetingId={meetingId} />
+      case 'tips':
+        return <BottomControlBarTips key={key} meeting={meeting} cancelConfirm={cancelConfirm} />
+      case 'ready':
+      case 'next':
+        return (
+          <BottomControlBarReady
+            key={key}
+            isNext={isPoker ? true : isFacilitating}
+            isFacilitating={isFacilitating}
+            isPoker={isPoker}
+            cancelConfirm={
+              isPoker ? undefined : confirmingButton === 'next' ? undefined : cancelConfirm
+            }
+            isConfirming={isPoker ? false : confirmingButton === 'next'}
+            setConfirmingButton={setConfirmingButton}
+            isDemoStageComplete={isDemoStageComplete}
+            meeting={meeting}
+            handleGotoNext={handleGotoNext}
+          />
+        )
+      case 'rejoin':
+        return <BottomControlBarRejoin key={key} onClick={() => gotoStageId(facilitatorStageId)} />
+      case 'timer':
+        return (
+          <StageTimerControl
+            key={key}
+            cancelConfirm={cancelConfirm}
+            defaultTimeLimit={DEFAULT_TIME_LIMIT[phaseType] ?? 1}
+            meeting={meeting}
+          />
+        )
+      case 'end':
+        return (
+          <EndMeetingButton
+            key={key}
+            cancelConfirm={confirmingButton === 'end' ? undefined : cancelConfirm}
+            isConfirming={confirmingButton === 'end'}
+            setConfirmingButton={setConfirmingButton}
+            meetingId={meetingId}
+            meetingType={meetingType}
+            isEnded={!!endedAt}
+          />
+        )
+      default:
+        return null
+    }
+  }
+
   return (
-    <Wrapper
+    <div
       ref={ref}
-      left={controlBarLeft}
+      className={cn(
+        'fixed bottom-0 single-reflection-column:bottom-2 flex h-14 min-h-14 single-reflection-column:w-auto w-full flex-nowrap items-center justify-between single-reflection-column:rounded bg-surface-card p-2 text-fg-primary text-sm',
+        isDesktop ? 'shadow-[var(--shadow-bar)]' : 'shadow-[var(--shadow-bar-up)]'
+      )}
+      style={{
+        left: controlBarLeft,
+        transition: `all 200ms ${BezierCurve.DECELERATE}`,
+        zIndex: ZIndex.BOTTOM_BAR
+      }}
       onMouseDown={onMouseDown}
       onClickCapture={onClickCapture}
       onTouchStart={onMouseDown}
     >
-      {tranChildren
-        .map((tranChild) => {
-          const {onTransitionEnd, child, status} = tranChild
-          const {key} = child
-          const tranProps = {
-            onTransitionEnd,
-            status: isInit ? TransitionStatus.ENTERED : status,
-            key
-          }
-          switch (key) {
-            case 'music':
-              return <BottomControlBarMusic {...tranProps} meetingId={meetingId} />
-            case 'tips':
-              return (
-                <BottomControlBarTips
-                  {...tranProps}
-                  meeting={meeting}
-                  cancelConfirm={cancelConfirm}
-                />
-              )
-            case 'ready':
-            case 'next':
-              return (
-                <BottomControlBarReady
-                  {...tranProps}
-                  isNext={isPoker ? true : isFacilitating}
-                  isFacilitating={isFacilitating}
-                  isPoker={isPoker}
-                  cancelConfirm={
-                    isPoker ? undefined : confirmingButton === 'next' ? undefined : cancelConfirm
-                  }
-                  isConfirming={isPoker ? false : confirmingButton === 'next'}
-                  setConfirmingButton={setConfirmingButton}
-                  isDemoStageComplete={isDemoStageComplete}
-                  meeting={meeting}
-                  handleGotoNext={handleGotoNext}
-                />
-              )
-            case 'rejoin':
-              return (
-                <BottomControlBarRejoin
-                  {...tranProps}
-                  onClick={() => gotoStageId(facilitatorStageId)}
-                />
-              )
-            case 'timer':
-              return (
-                <StageTimerControl
-                  {...tranProps}
-                  cancelConfirm={cancelConfirm}
-                  defaultTimeLimit={DEFAULT_TIME_LIMIT[phaseType] ?? 1}
-                  meeting={meeting}
-                />
-              )
-            case 'end':
-              return (
-                <EndMeetingButton
-                  {...tranProps}
-                  cancelConfirm={confirmingButton === 'end' ? undefined : cancelConfirm}
-                  isConfirming={confirmingButton === 'end'}
-                  setConfirmingButton={setConfirmingButton}
-                  meetingId={meetingId}
-                  meetingType={meetingType}
-                  isEnded={!!endedAt}
-                />
-              )
-            default:
-              return null
-          }
-        })
-        .filter(Boolean)}
-    </Wrapper>
+      {buttons.map(({key}, idx) => (
+        <Fragment key={key}>
+          {idx > 0 && <div className='h-8 w-px shrink-0 bg-hairline' />}
+          {renderButton(key)}
+        </Fragment>
+      ))}
+    </div>
   )
 }
 

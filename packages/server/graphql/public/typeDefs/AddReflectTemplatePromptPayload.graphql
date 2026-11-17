@@ -1,4 +1,0 @@
-type AddReflectTemplatePromptPayload {
-  error: StandardMutationError
-  prompt: ReflectPrompt
-}

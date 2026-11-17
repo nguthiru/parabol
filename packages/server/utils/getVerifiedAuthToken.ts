@@ -1,22 +1,29 @@
 import {verify} from 'jsonwebtoken'
 import type AuthToken from '../database/types/AuthToken'
-import logError from './logError'
+import {Logger} from './Logger'
 
 const SERVER_SECRET_BUFFER = Buffer.from(process.env.SERVER_SECRET!, 'base64')
 
-const getVerifiedAuthToken = (jwt: string | undefined | null, ignoreExp?: boolean) => {
+const getVerifiedAuthToken = (
+  jwt: string | undefined | null,
+  logErrors = true,
+  audience = 'action'
+): AuthToken | null => {
   if (!jwt) {
-    return {} as AuthToken
+    return null
   }
   try {
-    return verify(jwt, SERVER_SECRET_BUFFER, {
-      ignoreExpiration: ignoreExp,
+    const authToken = verify(jwt, SERVER_SECRET_BUFFER, {
+      algorithms: ['HS256'],
       clockTolerance: 10
     }) as AuthToken
+    return authToken.aud === audience ? authToken : null
   } catch (e) {
-    const error = e instanceof Error ? e : new Error('Verify auth token failed')
-    logError(error, {tags: {jwt}})
-    return {} as AuthToken
+    if (logErrors) {
+      const error = e instanceof Error ? e : new Error('Verify auth token failed')
+      Logger.warn(error, {tags: {jwt}})
+    }
+    return null
   }
 }
 

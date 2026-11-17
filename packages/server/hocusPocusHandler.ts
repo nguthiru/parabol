@@ -1,25 +1,45 @@
 import './hocusPocus'
-import type {IncomingHttpHeaders} from 'node:http2'
-import {redisHocusPocus} from './hocusPocus'
-import './hocusPocus'
-import type {WebSocketBehavior} from 'uWebSockets.js'
+import uws, {type WebSocketBehavior} from 'uWebSockets.js'
+import {activeYjsSockets} from './activeClients'
+import {getIsRefusingSockets} from './getIsShuttingDown'
 import {HocusPocusWebSocket} from './HocusPocusWebSocket'
+import {redisHocusPocus} from './hocusPocus'
+import {websocketMessagesDropped} from './metricsHandler'
+import {Logger} from './utils/Logger'
+import parseSessionId from './utils/parseSessionId'
+import rejectNonWebSocketUpgrade from './utils/rejectNonWebSocketUpgrade'
+import {runWithLogContext} from './utils/requestLogContext'
 import type {SerializedHTTPRequest} from './utils/tiptap/RedisServerAffinity'
 
 export type HocusPocusSocketData = {
   ip: string
+  sessionId?: string
   serializedHTTPRequest: SerializedHTTPRequest
   socket: HocusPocusWebSocket
   closed?: true
 }
 
+const getSocketLogContext = ({ip, sessionId}: HocusPocusSocketData) => ({
+  ip,
+  sessionId,
+  component: 'yjs'
+})
+
 export const hocusPocusHandler: WebSocketBehavior<HocusPocusSocketData> = {
-  maxPayloadLength: 1024 * 1024 * 2, // 2MB max size (for large paste operations)
+  maxPayloadLength: 1024 * 1024 * 64,
+  compression: uws.SHARED_COMPRESSOR | uws.SHARED_DECOMPRESSOR,
   upgrade(res, req, context) {
-    const headers: IncomingHttpHeaders = {}
+    if (rejectNonWebSocketUpgrade(res, req)) return
+    // a server handing its documents to the others must not take them back
+    if (getIsRefusingSockets()) {
+      res.end()
+      return
+    }
+    const headers = {} as SerializedHTTPRequest['headers']
     req.forEach((key, value) => {
       headers[key] = value
     })
+
     const ip =
       Buffer.from(res.getProxiedRemoteAddressAsText()).toString() ||
       Buffer.from(res.getRemoteAddressAsText()).toString()
@@ -29,11 +49,13 @@ export const hocusPocusHandler: WebSocketBehavior<HocusPocusSocketData> = {
       method: req.getMethod(),
       url: query ? `${pathname}?${query}` : pathname,
       headers,
-      socket: {remoteAddress: ip}
+      socket: {remoteAddress: ip},
+      connectedAt: Date.now()
     }
     res.upgrade<HocusPocusSocketData>(
       {
         ip,
+        sessionId: parseSessionId(new URLSearchParams(query).get('sessionId')),
         serializedHTTPRequest,
         socket: undefined as any
       },
@@ -44,22 +66,45 @@ export const hocusPocusHandler: WebSocketBehavior<HocusPocusSocketData> = {
     )
   },
   open(ws) {
+    activeYjsSockets.add(ws)
     const userData = ws.getUserData()
     userData.socket = new HocusPocusWebSocket(ws)
-    redisHocusPocus.onSocketOpen(userData.socket, userData.serializedHTTPRequest)
+    runWithLogContext(getSocketLogContext(userData), () => {
+      try {
+        redisHocusPocus.onSocketOpen(userData.socket, userData.serializedHTTPRequest)
+      } catch (e) {
+        Logger.error('hocusPocusHandler: failed to open socket', e, {ip: userData.ip})
+        userData.socket.close(1011)
+      }
+    })
   },
-  pong(ws, message) {
-    ws.getUserData().socket.emit('pong', message)
+  async message(ws, message, isBinary) {
+    if (!isBinary) return
+    const userData = ws.getUserData()
+    await runWithLogContext(getSocketLogContext(userData), async () => {
+      try {
+        await redisHocusPocus.onSocketMessage(userData.serializedHTTPRequest, message)
+      } catch (e) {
+        Logger.error('hocusPocusHandler: failed to handle message', e, {ip: userData.ip})
+        userData.socket.close(1011)
+      }
+    })
   },
-  async message(ws, message) {
-    const socketData = ws.getUserData()
-    const {socket, serializedHTTPRequest} = socketData
-    redisHocusPocus.onSocketMessage(socket, serializedHTTPRequest, message)
+  dropped() {
+    websocketMessagesDropped.inc({route: 'yjs'})
   },
   close(ws, code, reason) {
+    activeYjsSockets.delete(ws)
     const userData = ws.getUserData()
     userData.closed = true
-    const socketId = userData.serializedHTTPRequest.headers['sec-websocket-key']!
-    redisHocusPocus.onSocketClose(socketId, code, reason)
+    userData.socket.readyState = 3
+    const socketId = userData.serializedHTTPRequest.headers['sec-websocket-key']
+    runWithLogContext(getSocketLogContext(userData), () => {
+      try {
+        redisHocusPocus.onSocketClose(socketId, code, reason)
+      } catch (e) {
+        Logger.error('hocusPocusHandler: failed to close socket', e, {ip: userData.ip})
+      }
+    })
   }
 }

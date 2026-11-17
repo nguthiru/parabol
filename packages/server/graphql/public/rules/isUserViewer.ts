@@ -1,13 +1,36 @@
 import {GraphQLError} from 'graphql'
 import {rule} from 'graphql-shield'
+import type {AllPrimaryLoaders} from '../../../dataloader/RootDataLoader'
 import {getUserId} from '../../../utils/authorization'
-import type {GQLContext} from '../../graphql'
+import {CipherId} from '../../../utils/CipherId'
+import type {RuleContext} from '../../graphql'
+import {cacheByDotPath, getResolverDotPath, type ResolverDotPath} from './getResolverDotPath'
 
-const isUserViewer = rule({cache: 'strict'})(
-  async ({id: userId}, _args, {authToken}: GQLContext) => {
-    const viewerId = getUserId(authToken)
-    return userId === viewerId ? true : new GraphQLError('Must be logged in as user')
-  }
-)
-
-export default isUserViewer
+export const isUserViewer = <T>(
+  dotPath: ResolverDotPath<T>,
+  dataLoaderName?: AllPrimaryLoaders,
+  // the field on the loaded subject that holds the owning userId (e.g. 'createdBy' for authored rows)
+  ownerField: 'userId' | 'createdBy' = 'userId'
+) =>
+  rule(`isUserViewer-${dataLoaderName ?? ''}-${ownerField}`, {cache: cacheByDotPath(dotPath)})(
+    async (source, args, {authToken, dataLoader}: RuleContext) => {
+      const argVar = getResolverDotPath(dotPath, source, args)
+      let userId: string = argVar
+      if (dataLoaderName) {
+        // loaders are keyed by the raw db id; args carry a CipherId-encoded client id while
+        // source paths already hold the raw id
+        const dbId = dotPath.startsWith('source') ? argVar : CipherId.fromClient(argVar)[0]
+        const subject = await dataLoader.get(dataLoaderName as any).load(dbId)
+        const ownerId = subject?.[ownerField]
+        if (!ownerId)
+          return new GraphQLError(`Permission lookup failed on ${dataLoaderName} for ${argVar}`, {
+            extensions: {code: 'NOT_FOUND'}
+          })
+        userId = ownerId
+      }
+      const viewerId = getUserId(authToken)
+      if (userId !== viewerId)
+        return new GraphQLError('Viewer is incorrect user', {extensions: {code: 'FORBIDDEN'}})
+      return true
+    }
+  )

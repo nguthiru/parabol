@@ -20,7 +20,7 @@ type AgendaItemsStage implements NewMeetingStage & DiscussionThreadStage {
   """
   The meeting this stage belongs to
   """
-  meeting: NewMeeting
+  meeting: NewMeeting!
 
   """
   true if the facilitator has completed this stage, else false. Should be boolean(endAt)
@@ -86,12 +86,21 @@ type AgendaItemsStage implements NewMeetingStage & DiscussionThreadStage {
   The suggested time limit for a phase to be completed together, null if not enough data to make a suggestion
   """
   suggestedTimeLimit: Float
+
+  """
+  The team hosting the meeting this stage belongs to
+  """
   teamId: ID!
 
   """
   The number of milliseconds left before the scheduled end time. Useful for unsynced client clocks. null if scheduledEndTime is null
   """
   timeRemaining: Float
+
+  """
+  The 0-based position of this stage within its phase, ordered by sortOrder.
+  """
+  stageIdx: Int!
 
   """
   The ID to find the discussion that goes in the stage
@@ -107,5 +116,9 @@ type AgendaItemsStage implements NewMeetingStage & DiscussionThreadStage {
   The id of the agenda item this relates to
   """
   agendaItemId: ID!
+
+  """
+  The agenda item being discussed in this stage. Contains the topic text, who added it, and whether it has been pinned for recurring use
+  """
   agendaItem: AgendaItem!
 }

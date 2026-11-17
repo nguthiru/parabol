@@ -1,63 +1,39 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import ms from 'ms'
 import {useState} from 'react'
 import {useFragment} from 'react-relay'
-import type {StageTimerModalEndTime_facilitator$key} from '../__generated__/StageTimerModalEndTime_facilitator.graphql'
 import type {StageTimerModalEndTime_stage$key} from '../__generated__/StageTimerModalEndTime_stage.graphql'
+import type {StageTimerModalEndTime_teamMember$key} from '../__generated__/StageTimerModalEndTime_teamMember.graphql'
 import useAtmosphere from '../hooks/useAtmosphere'
 import useMutationProps from '../hooks/useMutationProps'
 import NotificationErrorMessage from '../modules/notifications/components/NotificationErrorMessage'
 import SetStageTimerMutation from '../mutations/SetStageTimerMutation'
 import {MeetingLabels} from '../types/constEnums'
+import {Button} from '../ui/Button/Button'
 import roundDateToNearestHalfHour from '../utils/roundDateToNearestHalfHour'
-import SecondaryButton from './SecondaryButton'
 import StageTimerModalEndTimeDate from './StageTimerModalEndTimeDate'
 import StageTimerModalEndTimeHour from './StageTimerModalEndTimeHour'
 import StageTimerModalEndTimeSlackToggle from './StageTimerModalEndTimeSlackToggle'
 
 interface Props {
   closePortal: () => void
-  facilitator: StageTimerModalEndTime_facilitator$key
+  teamMember: StageTimerModalEndTime_teamMember$key
   meetingId: string
   stage: StageTimerModalEndTime_stage$key
 }
-
-const Row = styled('div')({
-  alignItems: 'center',
-  display: 'flex',
-  width: '100%',
-  userSelect: 'none'
-})
-
-const SetLimit = styled('div')({
-  alignItems: 'center',
-  display: 'flex',
-  flexDirection: 'column',
-  padding: '16px 16px 8px'
-})
-
-const StyledButton = styled(SecondaryButton)({
-  marginTop: 8,
-  minWidth: 192
-})
-
-const ErrorMessage = styled(NotificationErrorMessage)({
-  marginBottom: -8
-})
 
 const DEFAULT_DURATION = ms('1d')
 const TOMORROW = roundDateToNearestHalfHour(new Date(Date.now() + DEFAULT_DURATION))
 
 const StageTimerModalEndTime = (props: Props) => {
-  const {closePortal, facilitator: facilitatorRef, meetingId, stage: stageRef} = props
-  const facilitator = useFragment(
+  const {closePortal, teamMember: teamMemberRef, meetingId, stage: stageRef} = props
+  const teamMember = useFragment(
     graphql`
-      fragment StageTimerModalEndTime_facilitator on TeamMember {
-        ...StageTimerModalEndTimeSlackToggle_facilitator
+      fragment StageTimerModalEndTime_teamMember on TeamMember {
+        ...StageTimerModalEndTimeSlackToggle_teamMember
       }
     `,
-    facilitatorRef
+    teamMemberRef
   )
   const stage = useFragment(
     graphql`
@@ -74,7 +50,9 @@ const StageTimerModalEndTime = (props: Props) => {
 
   const atmosphere = useAtmosphere()
 
-  const {submitting, onError, onCompleted, submitMutation, error} = useMutationProps()
+  const {submitting, onError, onCompleted, submitMutation, error} = useMutationProps({
+    errorDisplay: 'inline'
+  })
 
   const startTimer = () => {
     if (submitting || endTime.getTime() === new Date(scheduledEndTime || 0).getTime()) return
@@ -92,22 +70,22 @@ const StageTimerModalEndTime = (props: Props) => {
   }
 
   return (
-    <SetLimit>
-      <Row>
+    <div className='flex flex-col items-center px-4 pt-4 pb-2'>
+      <div className='flex w-full select-none items-center'>
         <StageTimerModalEndTimeDate endTime={endTime} setEndTime={setEndTime} />
-      </Row>
-      <Row>
+      </div>
+      <div className='flex w-full select-none items-center'>
         <StageTimerModalEndTimeHour endTime={endTime} setEndTime={setEndTime} />
-      </Row>
-      <Row>
-        <StageTimerModalEndTimeSlackToggle facilitator={facilitator} />
-      </Row>
-      <ErrorMessage error={error} />
-      <StyledButton onClick={startTimer}>
+      </div>
+      <div className='flex w-full select-none items-center'>
+        <StageTimerModalEndTimeSlackToggle teamMember={teamMember} />
+      </div>
+      <NotificationErrorMessage className='-mb-2' error={error} />
+      <Button variant='outline' size='sm' className='mt-2 min-w-[192px]' onClick={startTimer}>
         {scheduledEndTime ? 'Update ' : 'Start '}
         {MeetingLabels.TIME_LIMIT}
-      </StyledButton>
-    </SetLimit>
+      </Button>
+    </div>
   )
 }
 

@@ -1,35 +1,12 @@
 import {fetch} from '@whatwg-node/fetch'
-import {decode} from 'jsonwebtoken'
+import {gaxios, OAuth2Client, type TokenPayload} from 'google-auth-library'
 import GoogleManager from 'parabol-client/utils/GoogleManager'
 import makeAppURL from 'parabol-client/utils/makeAppURL'
-import {stringify} from 'querystring'
 import appOrigin from '../appOrigin'
-import logError from './logError'
+import type {OAuth2Error} from '../types/custom'
+import {OAuth2TokenError} from './OAuth2TokenError'
 
-interface OAuth2Response {
-  access_token: string
-  id_token: string
-  expires_in: number
-  token_type: string
-  refresh_token?: string
-}
-
-export interface GoogleIDToken {
-  iss: string
-  at_hash: string
-  email_verified: string
-  sub: string
-  azp: string
-  email: string
-  aud: string
-  iat: number
-  exp: number
-  nonce: string
-  hd: string
-  profile?: string
-  picture?: string
-  name?: string
-}
+export type {TokenPayload as GoogleIDToken}
 
 export default class GoogleServerManager extends GoogleManager {
   fetch = fetch
@@ -38,37 +15,27 @@ export default class GoogleServerManager extends GoogleManager {
   }
 
   static async fetchToken(code: string) {
-    const queryParams = {
-      client_id: process.env.GOOGLE_OAUTH_CLIENT_ID,
-      client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
-      code,
-      grant_type: 'authorization_code',
-      redirect_uri: makeAppURL(appOrigin, 'auth/google')
-    }
-
-    const uri = `https://oauth2.googleapis.com/token?${stringify(queryParams)}`
-
-    const tokenRes = await fetch(uri, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'parabol'
-      }
+    const client = new OAuth2Client({
+      clientId: process.env.GOOGLE_OAUTH_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET,
+      redirectUri: makeAppURL(appOrigin, 'auth/google')
     })
-    const tokenJson = (await tokenRes.json()) as OAuth2Response
-    // TODO: refactor to use authorizeOAuth2
-    if ('error' in tokenJson) {
-      const errorMessage = (tokenJson.error as string) || `Received null OAuth2 Error from ${uri}`
-      logError(new Error(errorMessage))
-    }
-    const {access_token: accessToken, id_token: idToken} = tokenJson
-    const id = decode(idToken) as GoogleIDToken
-    return new GoogleServerManager(accessToken, id)
+    const {tokens} = await client.getToken(code).catch((error: unknown) => {
+      const body: Partial<OAuth2Error> | undefined =
+        error instanceof gaxios.GaxiosError ? error.response?.data : undefined
+      if (typeof body?.error !== 'string') throw error
+      throw new OAuth2TokenError(body.error_description || body.error, body.error)
+    })
+    const ticket = await client.verifyIdToken({
+      idToken: tokens.id_token!,
+      audience: process.env.GOOGLE_OAUTH_CLIENT_ID
+    })
+    const id = ticket.getPayload()
+    return new GoogleServerManager(tokens.access_token!, id)
   }
 
-  id?: GoogleIDToken
-  constructor(accessToken: string, id?: GoogleIDToken) {
+  id?: TokenPayload
+  constructor(accessToken: string, id?: TokenPayload) {
     super(accessToken)
     this.id = id
   }

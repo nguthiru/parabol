@@ -1,17 +1,17 @@
+import {GraphQLError} from 'graphql'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
 import TeamNotificationSettingsId from '../../../../client/shared/gqlIds/TeamNotificationSettingsId'
 import getKysely from '../../../postgres/getKysely'
-import {getUserId, isTeamMember} from '../../../utils/authorization'
+import {isTeamMember} from '../../../utils/authorization'
 import publish from '../../../utils/publish'
-import standardError from '../../../utils/standardError'
 import type {MutationResolvers} from '../resolverTypes'
 
 const setTeamNotificationSetting: MutationResolvers['setTeamNotificationSetting'] = async (
   _source,
   {id: gqlId, event, isEnabled},
-  {authToken, dataLoader, socketId: mutatorId}
+  context
 ) => {
-  const viewerId = getUserId(authToken)
+  const {authToken, dataLoader, socketId: mutatorId} = context
   const operationId = dataLoader.share()
   const subOptions = {mutatorId, operationId}
   const pg = getKysely()
@@ -20,14 +20,15 @@ const setTeamNotificationSetting: MutationResolvers['setTeamNotificationSetting'
   // AUTH
   const setting = await dataLoader.get('teamNotificationSettings').load(id)
   if (!setting) {
-    return standardError(new Error('TeamNotificationSetting not found'), {
-      userId: viewerId
-    })
+    throw new GraphQLError('TeamNotificationSetting not found', {extensions: {code: 'NOT_FOUND'}})
   }
   const {teamId} = setting
   if (!isTeamMember(authToken, teamId)) {
-    return standardError(new Error('Attempted teamId spoof'), {
-      userId: viewerId
+    throw new GraphQLError('Attempted teamId spoof', {extensions: {code: 'FORBIDDEN'}})
+  }
+  if (context.resourceGrants && !(await context.resourceGrants.hasTeam(teamId))) {
+    throw new GraphQLError('PAT does not grant access to this team', {
+      extensions: {code: 'FORBIDDEN'}
     })
   }
 
@@ -55,7 +56,7 @@ const setTeamNotificationSetting: MutationResolvers['setTeamNotificationSetting'
     : setting.events.filter((e: any) => e !== event)
 
   const data = {id}
-  publish(SubscriptionChannel.TEAM, teamId, 'SetNotificationSettingSuccess', data, subOptions)
+  publish(SubscriptionChannel.TEAM, teamId, 'SetTeamNotificationSettingSuccess', data, subOptions)
   return data
 }
 

@@ -7,8 +7,6 @@ import generateUID from '../generateUID'
 import type {DataLoaderWorker} from '../graphql/graphql'
 import getKysely from '../postgres/getKysely'
 import type {Team} from '../postgres/types'
-import {analytics} from '../utils/analytics/analytics'
-import {Logger} from '../utils/Logger'
 
 const handleFirstAcceptedInvitation = async (
   team: Team,
@@ -18,7 +16,8 @@ const handleFirstAcceptedInvitation = async (
   const {id: teamId, isOnboardTeam} = team
   if (!isOnboardTeam) return null
   const teamMembers = await dataLoader.get('teamMembersByTeamId').load(teamId)
-  const teamLead = teamMembers.find((tm) => tm.isLead)!
+  const teamLead = teamMembers.find((tm) => tm.isLead)
+  if (!teamLead) return null
   const {userId} = teamLead
   const suggestedActions = await dataLoader.get('suggestedActionsByUserId').load(userId)
   const hasTryRetro = suggestedActions.some((sa) => sa.type === 'tryRetroMeeting')
@@ -59,7 +58,12 @@ const handleFirstAcceptedInvitation = async (
   return userId
 }
 
-const acceptTeamInvitation = async (team: Team, userId: string, dataLoader: DataLoaderWorker) => {
+const acceptTeamInvitation = async (
+  team: Team,
+  userId: string,
+  dataLoader: DataLoaderWorker,
+  isLead = false
+) => {
   const pg = getKysely()
   const {id: teamId, orgId} = team
   const [user, organizationUser] = await Promise.all([
@@ -67,6 +71,17 @@ const acceptTeamInvitation = async (team: Team, userId: string, dataLoader: Data
     dataLoader.get('organizationUsersByUserIdOrgId').load({userId, orgId})
   ])
   const {email} = user
+  const isNewToOrg = !organizationUser
+  if (isNewToOrg) {
+    // Join the org before the team. A TeamMember without an OrganizationUser passes isTeamMember
+    // but fails isViewerOnOrg, which breaks every org-scoped field (e.g. Team.organization) with
+    // no way for the user to self-heal. Letting this reject leaves them on neither, which is
+    // recoverable by retrying the invitation.
+    // clear the cache, adjustUserCount will mutate these
+    dataLoader.get('organizationUsersByUserIdOrgId').clear({userId, orgId})
+    dataLoader.get('users').clear(userId)
+    await adjustUserCount(userId, orgId, InvoiceItemType.ADD_USER, dataLoader)
+  }
   const teamLeadUserIdWithNewActions = await handleFirstAcceptedInvitation(team, dataLoader)
   const invitationNotifications = await pg
     .with('TeamMemberInsert', (qc) =>
@@ -76,9 +91,10 @@ const acceptTeamInvitation = async (team: Team, userId: string, dataLoader: Data
           id: TeamMemberId.join(teamId, userId),
           teamId,
           userId,
-          openDrawer: 'manageTeam'
+          openDrawer: 'manageTeam',
+          isLead
         })
-        .onConflict((oc) => oc.column('id').doUpdateSet({isNotRemoved: true, isLead: false}))
+        .onConflict((oc) => oc.column('id').doUpdateSet({isNotRemoved: true, isLead}))
     )
     .with('TeamInvitationUpdate', (qb) =>
       // redeem all invitations, otherwise if they have 2 someone could join after they've been kicked out
@@ -96,23 +112,6 @@ const acceptTeamInvitation = async (team: Team, userId: string, dataLoader: Data
     .returning('id')
     .execute()
   dataLoader.clearAll(['teamMembers', 'users', 'notifications'])
-  if (!organizationUser) {
-    // clear the cache, adjustUserCount will mutate these
-    dataLoader.get('organizationUsersByUserIdOrgId').clear({userId, orgId})
-    dataLoader.get('users').clear(userId)
-    try {
-      await adjustUserCount(userId, orgId, InvoiceItemType.ADD_USER, dataLoader)
-    } catch (e) {
-      Logger.log(e)
-    }
-
-    const highestTier = await dataLoader.get('highestTierForUserId').load(userId)
-    analytics.identify({
-      userId,
-      email: user.email,
-      highestTier
-    })
-  }
   const invitationNotificationIds = invitationNotifications.map(({id}) => id)
   // if accepted to team, don't count it towards the global denial count
   await pg

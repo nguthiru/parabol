@@ -1,0 +1,47 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import isValidDate from 'parabol-client/utils/isValidDate'
+import getKysely from '../../../postgres/getKysely'
+import {getUserId} from '../../../utils/authorization'
+import publish from '../../../utils/publish'
+import type {MutationResolvers} from '../resolverTypes'
+
+const updateTaskDueDate: MutationResolvers['updateTaskDueDate'] = async (
+  _source,
+  {taskId, dueDate},
+  {authToken, dataLoader, socketId: mutatorId}
+) => {
+  const pg = getKysely()
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+
+  // AUTH
+  const viewerId = getUserId(authToken)
+
+  // VALIDATION
+  const formattedDueDate = dueDate && new Date(dueDate)
+  const nextDueDate = isValidDate(formattedDueDate) ? formattedDueDate : null
+  const task = await dataLoader.get('tasks').load(taskId)
+  if (!task) {
+    throw new GraphQLError('Task not found', {extensions: {code: 'NOT_FOUND'}})
+  }
+
+  // RESOLUTION
+  await pg.updateTable('Task').set({dueDate: nextDueDate}).where('id', '=', taskId).execute()
+  dataLoader.clearAll('tasks')
+  const data = {taskId}
+
+  const isPrivate = task.tags.includes('private')
+  if (isPrivate) {
+    publish(SubscriptionChannel.TASK, viewerId, 'UpdateTaskDueDatePayload', data, subOptions)
+  } else {
+    const teamMembers = await dataLoader.get('teamMembersByTeamId').load(task.teamId)
+    teamMembers.forEach((teamMember) => {
+      const {userId} = teamMember
+      publish(SubscriptionChannel.TASK, userId, 'UpdateTaskDueDatePayload', data, subOptions)
+    })
+  }
+  return data
+}
+
+export default updateTaskDueDate

@@ -1,21 +1,27 @@
 import {sql} from 'kysely'
 import getKysely from '../postgres/getKysely'
-import {getTeamPromptResponsesByMeetingIds} from '../postgres/queries/getTeamPromptResponsesByMeetingIds'
 import {
   selectAgendaItems,
   selectComments,
   selectMeetingMembers,
   selectNewMeetings,
+  selectOAuthAPIProvider,
   selectOrganizations,
-  selectReflectPrompts,
   selectRetroReflections,
   selectSlackAuths,
   selectSlackNotifications,
   selectSuggestedAction,
   selectTasks,
+  selectTeamHealthCategorySummaries,
+  selectTeamHealthQuestionPacks,
+  selectTeamHealthQuestions,
+  selectTeamHealthResponses,
+  selectTeamHealthTemplateQuestions,
   selectTeamInvitations,
+  selectTeamPromptResponses,
   selectTeams,
   selectTemplateDimension,
+  selectTemplatePrompts,
   selectTemplateScale,
   selectTimelineEvent
 } from '../postgres/select'
@@ -160,6 +166,57 @@ export const templateDimensionsByTemplateId = foreignKeyLoaderMaker(
   }
 )
 
+export const teamHealthQuestionsByPackId = foreignKeyLoaderMaker(
+  'teamHealthQuestions',
+  'packId',
+  async (packIds) => {
+    // replaced questions stay resolvable by id (for historical responses) but drop out of pack listings
+    return selectTeamHealthQuestions()
+      .where('packId', 'in', packIds)
+      .where('replacedBy', 'is', null)
+      .orderBy('TeamHealthQuestion.id')
+      .execute()
+  }
+)
+
+export const teamHealthQuestionPacksByUserId = foreignKeyLoaderMaker(
+  'teamHealthQuestionPacks',
+  'userId',
+  async (userIds) => {
+    return selectTeamHealthQuestionPacks()
+      .where('userId', 'in', userIds)
+      .orderBy('TeamHealthQuestionPack.id')
+      .execute()
+  }
+)
+
+export const teamHealthTemplateQuestionsByTemplateId = foreignKeyLoaderMaker(
+  'teamHealthTemplateQuestions',
+  'templateId',
+  async (templateIds) => {
+    return selectTeamHealthTemplateQuestions()
+      .where('templateId', 'in', templateIds)
+      .orderBy('TeamHealthTemplateQuestion.id')
+      .execute()
+  }
+)
+
+export const teamHealthResponsesByMeetingId = foreignKeyLoaderMaker(
+  'teamHealthResponses',
+  'meetingId',
+  async (meetingIds) => {
+    return selectTeamHealthResponses().where('meetingId', 'in', meetingIds).execute()
+  }
+)
+
+export const teamHealthCategorySummariesByMeetingId = foreignKeyLoaderMaker(
+  'teamHealthCategorySummaries',
+  'meetingId',
+  async (meetingIds) => {
+    return selectTeamHealthCategorySummaries().where('meetingId', 'in', meetingIds).execute()
+  }
+)
+
 export const templateDimensionsByScaleId = foreignKeyLoaderMaker(
   'templateDimensions',
   'scaleId',
@@ -179,7 +236,13 @@ export const suggestedActionsByUserId = foreignKeyLoaderMaker(
 export const teamPromptResponsesByMeetingId = foreignKeyLoaderMaker(
   'teamPromptResponses',
   'meetingId',
-  getTeamPromptResponsesByMeetingIds
+  async (meetingIds) => {
+    return selectTeamPromptResponses()
+      .where('meetingId', 'in', meetingIds)
+      .where('sharedAt', 'is not', null)
+      .orderBy('id')
+      .execute()
+  }
 )
 
 export const agendaItemsByTeamId = foreignKeyLoaderMaker(
@@ -223,12 +286,13 @@ export const commentsByDiscussionId = foreignKeyLoaderMaker(
   }
 )
 
-export const reflectPromptsByTemplateId = foreignKeyLoaderMaker(
-  'reflectPrompts',
+export const templatePromptsByTemplateId = foreignKeyLoaderMaker(
+  'templatePrompts',
   'templateId',
   async (templateIds) => {
-    return selectReflectPrompts()
+    return selectTemplatePrompts()
       .where('templateId', 'in', templateIds)
+      .where('removedAt', 'is', null)
       .orderBy('sortOrder')
       .execute()
   }
@@ -264,6 +328,20 @@ export const activeMeetingSeriesByTeamId = foreignKeyLoaderMaker(
       .selectFrom('MeetingSeries')
       .selectAll()
       .where('teamId', 'in', teamIds)
+      .where('cancelledAt', 'is', null)
+      .orderBy('createdAt', 'desc')
+      .execute()
+  }
+)
+
+export const meetingSeriesByGroupId = foreignKeyLoaderMaker(
+  'meetingSeries',
+  'groupId',
+  async (groupIds) => {
+    return getKysely()
+      .selectFrom('MeetingSeries')
+      .selectAll()
+      .where('groupId', 'in', groupIds)
       .where('cancelledAt', 'is', null)
       .orderBy('createdAt', 'desc')
       .execute()
@@ -329,5 +407,16 @@ export const tasksByIntegrationHash = foreignKeyLoaderMaker(
   async (integrationHashes) => {
     // waraning! contains private tasks
     return selectTasks().where('integrationHash', 'in', integrationHashes).execute()
+  }
+)
+
+export const oauthProvidersByOrgId = foreignKeyLoaderMaker(
+  'oAuthProviders',
+  'orgId',
+  async (orgIds) => {
+    return selectOAuthAPIProvider()
+      .where('orgId', 'in', orgIds)
+      .orderBy('createdAt', 'desc')
+      .execute()
   }
 )

@@ -1,0 +1,69 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import generateUID from '../../../generateUID'
+import getKysely from '../../../postgres/getKysely'
+import removeMeetingTemplatesForTeam from '../../../postgres/queries/removeMeetingTemplatesForTeam'
+import safeArchiveTeam from '../../../safeMutations/safeArchiveTeam'
+import {getUserId} from '../../../utils/authorization'
+import publish from '../../../utils/publish'
+import {revalidateYjsConnections} from '../../../utils/tiptap/revalidateYjsConnections'
+import isValid from '../../isValid'
+import type {MutationResolvers} from '../resolverTypes'
+
+const archiveTeam: MutationResolvers['archiveTeam'] = async (
+  _source,
+  {teamId},
+  {authToken, dataLoader, socketId: mutatorId}
+) => {
+  const pg = getKysely()
+  const operationId = dataLoader.share()
+  const subOptions = {operationId, mutatorId}
+
+  // RESOLUTION
+  const viewerId = getUserId(authToken)
+  const {team, users, removedSuggestedActionIds} = await safeArchiveTeam(teamId, dataLoader)
+
+  if (!team) {
+    throw new GraphQLError('Already archived team', {extensions: {code: 'CONFLICT'}})
+  }
+
+  const teamTemplates = await dataLoader.get('meetingTemplatesByTeamId').load(teamId)
+  const teamTemplateIds = teamTemplates.map(({id}) => id)
+
+  await removeMeetingTemplatesForTeam(teamId)
+
+  const notifications = users
+    .map((user) => user?.id)
+    .filter((userId) => userId !== undefined && userId !== viewerId)
+    .map((notifiedUserId) => ({
+      id: generateUID(),
+      type: 'TEAM_ARCHIVED' as const,
+      userId: notifiedUserId!,
+      teamId,
+      archivorUserId: viewerId
+    }))
+
+  if (notifications.length) {
+    await pg.insertInto('Notification').values(notifications).execute()
+  }
+
+  const data = {
+    teamId,
+    notificationIds: notifications.map(({id}) => id),
+    teamTemplateIds,
+    removedSuggestedActionIds
+  }
+  publish(SubscriptionChannel.TEAM, teamId, 'ArchiveTeamPayload', data, subOptions)
+  await revalidateYjsConnections({userIds: users.filter(isValid).map(({id}) => id)})
+
+  await Promise.all(
+    users.filter(isValid).map(async (user) => {
+      const tms = await dataLoader.get('teamIdsByUserId').load(user.id)
+      publish(SubscriptionChannel.NOTIFICATION, user.id, 'AuthTokenPayload', {tms})
+    })
+  )
+
+  return data
+}
+
+export default archiveTeam

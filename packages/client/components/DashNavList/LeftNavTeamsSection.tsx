@@ -1,8 +1,8 @@
-import ManageAccountsIcon from '@mui/icons-material/ManageAccounts'
+import {DragDropContext, Draggable, Droppable, type DropResult} from '@hello-pangea/dnd'
 import graphql from 'babel-plugin-relay/macro'
-import {DragDropContext, Draggable, Droppable, type DropResult} from 'react-beautiful-dnd'
 import {useFragment} from 'react-relay'
-import {useHistory} from 'react-router'
+import {useNavigate} from 'react-router'
+import {ManageAccounts as ManageAccountsIcon} from '~/ui/icons'
 import type {LeftNavTeamsSection_viewer$key} from '../../__generated__/LeftNavTeamsSection_viewer.graphql'
 import useEventCallback from '../../hooks/useEventCallback'
 import {useUpdateTeamSortOrderMutation} from '../../mutations/useUpdateTeamSortOrderMutation'
@@ -57,18 +57,18 @@ export const LeftNavTeamsSection = (props: Props) => {
     const sortOrder = getSortOrder(teams, source.index, destination.index)
     execute({variables: {teamId: sourceItem.id, sortOrder}})
   })
-  const history = useHistory()
+  const navigate = useNavigate()
   return (
     <div>
-      {/* TODO: handle no teams? e.g. {!org.teams.some((team) => team.isViewerOnTeam) && <EmptyTeams organizationRef={org} />} */}
-      <div className='group flex flex-1 cursor-pointer items-center justify-center rounded-md py-0.5 pl-3 font-semibold text-xs leading-5 hover:bg-slate-300'>
+      {/* TODO: handle no teams? */}
+      <div className='group flex flex-1 cursor-pointer items-center justify-center rounded-md py-0.5 pl-3 font-semibold text-xs leading-5 hover:bg-surface-nav-hover'>
         <LeftNavHeader>{'Teams'}</LeftNavHeader>
         <LeftNavItemButtons>
           <LeftNavHeaderButton
             Icon={ManageAccountsIcon}
             onClick={(e) => {
               e.preventDefault()
-              history.push('/me/organizations')
+              navigate('/me/organizations')
             }}
             tooltip={'Manage Teams'}
           />

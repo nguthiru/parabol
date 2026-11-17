@@ -7,14 +7,6 @@ import type StrictEventEmitter from 'strict-event-emitter-types'
 import type {ReactableEnum} from '~/__generated__/AddReactjiToReactableMutation.graphql'
 import type {DragReflectionDropTargetTypeEnum} from '~/__generated__/EndDraggingReflectionMutation.graphql'
 import {PALETTE} from '~/styles/paletteV3'
-import type ReflectPhase from '../../../server/database/types/ReflectPhase'
-import type {NewMeetingStage} from '../../../server/graphql/private/resolverTypes'
-import type {Task as ITask} from '../../../server/postgres/types/index.d'
-import type {
-  DiscussPhase,
-  DiscussStage,
-  NewMeetingPhase
-} from '../../../server/postgres/types/NewMeetingPhase'
 import {getTagsFromTipTapTask} from '../../shared/tiptap/getTagsFromTipTapTask'
 import {serverTipTapExtensions} from '../../shared/tiptap/serverTipTapExtensions'
 import {splitTipTapContent} from '../../shared/tiptap/splitTipTapContent'
@@ -28,6 +20,7 @@ import {DISCUSS, GROUP, REFLECT, VOTE} from '../../utils/constants'
 import dndNoise from '../../utils/dndNoise'
 import {getSimpleGroupTitle} from '../../utils/getSimpleGroupTitle'
 import findStageById from '../../utils/meetings/findStageById'
+import setStorageItem from '../../utils/setStorageItem'
 import sleep from '../../utils/sleep'
 import startStage_ from '../../utils/startStage_'
 import unlockAllStagesForPhase from '../../utils/unlockAllStagesForPhase'
@@ -96,9 +89,42 @@ export type DemoReflectionGroup = {
   voterIds: string[]
 }
 
+type DiscussPhase = {
+  id: string
+  endAt: string | Date
+  startAt: string | Date
+  stages: DiscussStage[]
+}
+
+type DiscussStage = {
+  id: string
+  endAt: string | Date
+  startAt: string | Date
+  isComplete: boolean
+  sortOrder: number
+}
+
+type NewMeetingPhase = {
+  id: string
+  endAt: string | Date
+  startAt: string | Date
+  stages: NewMeetingStage[]
+  phaseType: string
+}
+
+type NewMeetingStage = {
+  id: string
+  endAt: string | Date
+  startAt: string | Date
+  phaseType: string
+  stageType: string
+  isComplete: boolean
+  sortOrder: number
+}
+
 export type IDiscussPhase = DiscussPhase
 
-export type IReflectPhase = Omit<ReflectPhase, 'endAt' | 'startAt'> & {
+export type IReflectPhase = {
   startAt: string | Date
   endAt: string | Date
   focusedPromptId: string | null
@@ -118,7 +144,7 @@ export type INewMeetingPhase = Omit<NewMeetingPhase, 'endAt' | 'startAt'> & {
   endAt: string | Date
 }
 
-export type DemoTask = Omit<ITask, 'agendaItem' | 'createdAt' | 'updatedAt' | 'doneMeetingId'> & {
+export type DemoTask = {
   __typename: 'Task'
   __isThreadable: 'Comment'
   isActive: true
@@ -126,6 +152,19 @@ export type DemoTask = Omit<ITask, 'agendaItem' | 'createdAt' | 'updatedAt' | 'd
   updatedAt: string
   doneMeetingId: string | null
   replies: (DemoComment | DemoTask)[]
+  tags: string[]
+  content: string
+  plaintextContent: string
+  id: string
+  sortOrder: number
+  threadableId: string
+  threadableType: string
+  threadableEdge: DemoThreadableEdge
+  userId: string
+  dueDate: string | Date
+  discussionId: string
+  teamId: string
+  status: string
 }
 
 interface Payload {
@@ -220,10 +259,70 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
     }
   }
 
+  private removeReflectionFromGroup(reflection: DemoReflection) {
+    const reflectionGroups = this.db.reflectionGroups
+    const oldReflectionGroup = reflectionGroups.find(
+      (group) => group.id === reflection.reflectionGroupId
+    )!
+    const oldReflections = oldReflectionGroup.reflections
+    if (oldReflections.length < 2) return
+    const now = new Date().toJSON()
+    const columnGroups = reflectionGroups.filter((group) => group.promptId === reflection.promptId)
+    const nextGroup = columnGroups[columnGroups.indexOf(oldReflectionGroup) + 1]
+    const sortOrder = nextGroup
+      ? (oldReflectionGroup.sortOrder + nextGroup.sortOrder) / 2 + dndNoise()
+      : oldReflectionGroup.sortOrder + 1 + dndNoise()
+    const reflectionGroupId = this.getTempId('group')
+    const reflectionGroup = {
+      __typename: 'RetroReflectionGroup',
+      id: reflectionGroupId,
+      reflectionGroupId,
+      smartTitle: null,
+      title: null,
+      commentors: null,
+      voteCount: 0,
+      viewerVoteCount: 0,
+      createdAt: now,
+      isActive: true,
+      meetingId: RetroDemo.MEETING_ID,
+      meeting: this.db.newMeeting,
+      prompt: reflection.prompt,
+      promptId: reflection.promptId,
+      reflections: [reflection],
+      sortOrder,
+      summary: null,
+      discussionPromptQuestion: null,
+      tasks: [],
+      thread: makeReflectionGroupThread(),
+      titleIsUserDefined: false,
+      updatedAt: now,
+      voterIds: []
+    } as DemoReflectionGroup
+    reflectionGroups.splice(reflectionGroups.indexOf(oldReflectionGroup) + 1, 0, reflectionGroup)
+    this.db.discussions.push(new DemoDiscussion(reflectionGroupId))
+    oldReflections.splice(
+      oldReflections.findIndex(({id}) => id === reflection.id),
+      1
+    )
+    Object.assign(reflection, {
+      sortOrder: 0,
+      reflectionGroupId,
+      retroReflectionGroup: reflectionGroup,
+      updatedAt: now
+    })
+    const titleIsUserDefined = oldReflectionGroup.smartTitle !== oldReflectionGroup.title
+    this.updateReflectionGroupTitle(reflectionGroup, [reflection.content])
+    this.updateReflectionGroupTitle(
+      oldReflectionGroup,
+      oldReflections.map(({content}) => content),
+      titleIsUserDefined
+    )
+  }
+
   startDemo() {
     this.startBot()
     this.db._started = true
-    window.localStorage.setItem('retroDemo', stringify(this.db))
+    setStorageItem('localStorage', 'retroDemo', stringify(this.db))
   }
 
   getUnlockedStages(stageIds: string[]) {
@@ -296,26 +395,22 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
         }
       }
     },
-    TaskFooterIntegrateMenuQuery: (_teamId: unknown, userId: string) => {
+    TaskFooterIntegrateMenuQuery: () => {
       const user = this.db.users[0]
       return {
         viewer: {
           ...user,
-          userOnTeam: {
-            ...user
-          },
-          assigneeTeamMember: this.db.teamMembers.find(
-            (teamMember) => teamMember.userId === userId
-          ),
+          team: null,
           viewerTeamMember: this.db.teamMembers[0]
         }
       }
     },
-    TaskFooterIntegrateMenuListLocalQuery: () => {
-      const user = this.db.users[0]
+    TaskSendControlQuery: () => {
       return {
         viewer: {
-          ...user
+          ...this.db.users[0],
+          team: null,
+          teamMember: this.db.teamMembers[0]
         }
       }
     },
@@ -389,10 +484,7 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
     useAllIntegrationsQuery: () => {
       return {
         viewer: {
-          ...this.db.users[0],
-          userOnTeam: {
-            ...this.db.users[0]
-          }
+          ...this.db.users[0]
         }
       }
     },
@@ -520,12 +612,13 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
       const {content} = task
       const doc = JSON.parse(content)
       const {title, bodyContent} = splitTipTapContent(doc)
-      const bodyHTML = generateHTML(bodyContent, serverTipTapExtensions)
+      const bodyHTML = bodyContent ? generateHTML(bodyContent, serverTipTapExtensions) : ''
       const now = new Date().toJSON()
 
       if (integrationProviderService === 'github') {
         Object.assign(task, {
           updatedAt: now,
+          taskService: 'github',
           integration: {
             __typename: '_xGitHubIssue',
             id: `${taskId}:GitHub`,
@@ -549,6 +642,7 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
         Object.assign(task, {
           updatedAt: now,
           integrationHash: integrationRepoId,
+          taskService: 'jira',
           integration: {
             __typename: 'JiraIssue',
             id: `jira:${taskId}`,
@@ -559,6 +653,7 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
             descriptionHTML: bodyHTML,
             summary: title,
             url: ExternalLinks.INTEGRATIONS_JIRA,
+            extraFields: [],
             project: {
               id: `${key}:id`,
               key,
@@ -578,12 +673,13 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
         Object.assign(task, {
           updatedAt: now,
           integrationHash: integrationRepoId,
+          taskService: 'gitlab',
           integration: {
             __typename: '_xGitLabIssue',
             id: `gitlab:${taskId}`,
             iid,
             title,
-            description: bodyHTML,
+            descriptionHtml: bodyHTML,
             webPath,
             webUrl: 'https://www.parabol.co/integrations/',
             state: 'opened'
@@ -1060,6 +1156,24 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
       }
       return {setStageTimer: data}
     },
+    SetMeetingMusicMutation: ({
+      meetingId,
+      trackSrc,
+      isPlaying
+    }: {
+      meetingId: string
+      trackSrc: string | null
+      isPlaying: boolean
+    }) => {
+      return {
+        setMeetingMusic: {
+          __typename: 'SetMeetingMusicSuccess',
+          meetingId,
+          trackSrc,
+          isPlaying
+        }
+      }
+    },
     StartDraggingReflectionMutation: (
       {reflectionId, dragId}: {reflectionId: string; dragId: string},
       userId: string
@@ -1241,6 +1355,29 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
       }
       return {endDraggingReflection: data}
     },
+    UngroupReflectionMutation: ({
+      reflectionGroupId,
+      reflectionId
+    }: {
+      reflectionGroupId?: string | null
+      reflectionId?: string | null
+    }) => {
+      const reflectionsToUngroup = reflectionId
+        ? this.db.reflections.filter(({id}) => id === reflectionId)
+        : (this.db.reflectionGroups
+            .find(({id}) => id === reflectionGroupId)
+            ?.reflections.slice(1) ?? [])
+      reflectionsToUngroup.forEach((reflection) => {
+        reflection.isHumanTouched = true
+        this.removeReflectionFromGroup(reflection)
+      })
+      return {
+        ungroupReflection: {
+          __typename: 'UngroupReflectionSuccess',
+          meeting: this.db.newMeeting
+        }
+      }
+    },
     UpdateDragLocationMutation: ({input}: {input: any}, userId: string) => {
       const {teamId, ...inputData} = input
       const data = {
@@ -1325,7 +1462,7 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
       )
 
       let isUnlock
-      let unlockedStageIds
+      let unlockedStageIds: string[] | undefined
       if (voteCount === 0) {
         isUnlock = false
       } else if (voteCount === 1 && !isUnvote) {
@@ -1381,6 +1518,7 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
         editors: [],
         integrationHash: null,
         integration: null,
+        taskService: null,
         team: this.db.team,
         meetingId: RetroDemo.MEETING_ID,
         replies: [],
@@ -1646,8 +1784,18 @@ class ClientGraphQLServer extends (EventEmitter as GQLDemoEmitter) {
       }
       return {endRetrospective: data}
     },
-    InviteToTeamMutation: ({invitees}: any) => {
-      return {inviteToTeam: {invitees}}
+    useInviteToTeamMutation: ({invitees}: any) => {
+      return {
+        inviteToTeam: {
+          invitees: (invitees as string[]).map((email) => ({
+            email,
+            status: 'sent',
+            message: null,
+            suggestedEmail: null
+          })),
+          removedSuggestedActionId: null
+        }
+      }
     },
     UpdateCommentContentMutation: (
       {commentId, content}: {commentId: string; content: string},

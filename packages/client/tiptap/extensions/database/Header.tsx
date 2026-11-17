@@ -1,34 +1,42 @@
-import {
-  Check,
-  ChevronRight,
-  ContentCopy,
-  DeleteOutline,
-  FirstPage,
-  LastPage,
-  Notes,
-  SwapHoriz
-} from '@mui/icons-material'
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import {FormEvent} from 'react'
-import * as Y from 'yjs'
+import {HocuspocusProvider} from '@hocuspocus/provider'
+import {useEffect, useRef, useState} from 'react'
+import {Notes} from '~/ui/icons'
 import useForm from '../../../hooks/useForm'
-import {Input} from '../../../ui/Input/Input'
-import {DATABASE_COLUMN_NAME_MAX_CHARS} from '../../../utils/constants'
-import {
-  ColumnId,
-  ColumnMeta,
-  changeColumn,
-  deleteColumn,
-  duplicateColumn,
-  insertColumnAfter,
-  insertColumnBefore
-} from './data'
+import {Menu} from '../../../ui/Menu/Menu'
+import {ColumnMenu} from './ColumnMenu'
+import {ColumnId, changeColumn, getColumnMeta} from './data'
 import {DataType, DataTypeIcons} from './types'
+import {useFocus} from './useFocus'
 
-export const Header = (props: {columnMeta: ColumnMeta; doc: Y.Doc; columnId: ColumnId}) => {
-  const {doc, columnId, columnMeta} = props
+type Props = {
+  provider: HocuspocusProvider
+  columnId: ColumnId
+}
+export const Header = (props: Props) => {
+  const {provider, columnId} = props
+  const {document: doc} = provider
 
-  const {name, type} = columnMeta
+  const {focusProps} = useFocus({provider, key: columnId})
+
+  const columnMetaMap = getColumnMeta(doc)
+  const [name, setName] = useState(columnMetaMap.get(columnId)?.name ?? 'Untitled')
+  const [type, setType] = useState<DataType>(columnMetaMap.get(columnId)?.type ?? 'text')
+
+  useEffect(() => {
+    const updateMeta = () => {
+      const meta = columnMetaMap.get(columnId)
+      setName(meta?.name ?? 'Untitled')
+      setType(meta?.type ?? 'text')
+    }
+
+    columnMetaMap.observe(updateMeta)
+    updateMeta()
+
+    return () => {
+      columnMetaMap.unobserve(updateMeta)
+    }
+  }, [columnMetaMap, columnId])
+
   const changeType = (newType: string) => {
     changeColumn(doc, columnId, {name, type: newType as DataType})
   }
@@ -42,106 +50,59 @@ export const Header = (props: {columnMeta: ColumnMeta; doc: Y.Doc; columnId: Col
     }
   })
 
-  const handleChangeTitle = (e: FormEvent) => {
-    e.preventDefault()
+  const handleChangeTitle = () => {
+    if (!fields.newTitle.value || fields.newTitle.value === name) {
+      return
+    }
     changeTitle(fields.newTitle.value)
     fields.newTitle.resetValue()
   }
 
-  const dataActions = [
-    {
-      label: 'Insert left',
-      icon: <FirstPage />,
-      action: () => {
-        insertColumnBefore(doc, columnId)
-      }
-    },
-    {
-      label: 'Insert right',
-      icon: <LastPage />,
-      action: () => {
-        insertColumnAfter(doc, columnId)
-      }
-    },
-    {
-      label: 'Duplicate property',
-      icon: <ContentCopy />,
-      action: () => {
-        duplicateColumn(doc, columnId)
-      }
-    },
-    {
-      label: 'Delete property',
-      icon: <DeleteOutline />,
-      action: () => {
-        deleteColumn(doc, columnId)
-      }
+  const [menuOpen, setMenuOpen] = useState(false)
+  const onOpenChange = (open: boolean) => {
+    if (!open) {
+      handleChangeTitle()
     }
-  ]
+    setMenuOpen(open)
+  }
+
+  // a pointer user never asked for focus, so handing it back on close would leave a stray focus ring on the header
+  const openedByPointerRef = useRef(false)
+  const onCloseAutoFocus = (e: Event) => {
+    if (!openedByPointerRef.current) return
+    openedByPointerRef.current = false
+    e.preventDefault()
+  }
+
+  const TypeIcon = DataTypeIcons[type] ?? Notes
 
   return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <div className='items-cursor-pointer flex w-full items-center gap-2 p-2 hover:bg-slate-100'>
-          {DataTypeIcons[type as DataType] || <Notes />}
-          <span className='truncate'>{name}</span>
-        </div>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          asChild
-          className='bg-white p-2 text-slate-800'
-          align='start'
-          collisionPadding={8}
+    <Menu
+      open={menuOpen}
+      onOpenChange={onOpenChange}
+      trigger={
+        <button
+          {...focusProps}
+          onPointerDown={() => {
+            openedByPointerRef.current = true
+          }}
+          className='-outline-offset-2 flex h-full w-full cursor-pointer items-center gap-1.5 px-3 text-left font-medium outline-accent hover:bg-surface-hover focus-visible:outline-2 data-[state=open]:bg-surface-hover'
         >
-          <div className='top-0 left-0 flex max-h-[var(--radix-popper-available-height)] max-w-[var(--radix-popover-content-available-width)] flex-col overflow-hidden rounded-lg shadow-dialog data-[side=bottom]:animate-slide-down data-[side=top]:animate-slide-up'>
-            <form onSubmit={handleChangeTitle}>
-              <Input
-                className='mb-2 w-full border-slate-300 border-b pb-1'
-                name='newTitle'
-                defaultValue={name}
-                onChange={onChange}
-                maxLength={DATABASE_COLUMN_NAME_MAX_CHARS}
-              />
-            </form>
-            <DropdownMenu.Sub>
-              <DropdownMenu.SubTrigger className='flex cursor-pointer items-center gap-2 rounded-md p-2 hover:bg-slate-100'>
-                <SwapHoriz />
-                Change type
-                <ChevronRight className='ml-auto' />
-              </DropdownMenu.SubTrigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.SubContent className='min-w-[200px] bg-white p-2 text-slate-800'>
-                  <DropdownMenu.RadioGroup value={type} onValueChange={changeType}>
-                    {Object.entries(DataTypeIcons).map(([type, icon]) => (
-                      <DropdownMenu.RadioItem
-                        key={type}
-                        value={type}
-                        className='group flex cursor-pointer items-center gap-2 rounded-md p-2 capitalize hover:bg-slate-100'
-                      >
-                        {icon}
-                        {type}
-                        <Check className='ml-auto hidden group-data-[state=checked]:inline' />
-                      </DropdownMenu.RadioItem>
-                    ))}
-                  </DropdownMenu.RadioGroup>
-                </DropdownMenu.SubContent>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Sub>
-            <DropdownMenu.Separator className='my-1 h-px bg-slate-200' />
-            {dataActions.map(({label, icon, action}) => (
-              <DropdownMenu.Item
-                key={label}
-                className='flex cursor-pointer items-center gap-2 rounded-md p-2 hover:bg-slate-100'
-                onSelect={action}
-              >
-                {icon}
-                {label}
-              </DropdownMenu.Item>
-            ))}
-          </div>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+          <TypeIcon className='text-[16px] text-fg-muted' />
+          <span className='truncate'>{name}</span>
+        </button>
+      }
+    >
+      <ColumnMenu
+        doc={doc}
+        columnId={columnId}
+        name={name}
+        type={type}
+        onNameChange={onChange}
+        onNameSubmit={handleChangeTitle}
+        onTypeChange={changeType}
+        onCloseAutoFocus={onCloseAutoFocus}
+      />
+    </Menu>
   )
 }

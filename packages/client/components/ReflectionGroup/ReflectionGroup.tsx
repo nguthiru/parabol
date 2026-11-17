@@ -1,5 +1,5 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
+import {AnimatePresence} from 'motion/react'
 import {type RefObject, useEffect, useMemo, useRef, useState} from 'react'
 import {commitLocalUpdate, useFragment} from 'react-relay'
 import type {ReflectionGroup_meeting$key} from '../../__generated__/ReflectionGroup_meeting.graphql'
@@ -13,81 +13,51 @@ import {
   ReflectionStackPerspective,
   Times
 } from '../../types/constEnums'
+import {cn} from '../../ui/cn'
 import {GROUP} from '../../utils/constants'
 import type {SwipeColumn} from '../GroupingKanban'
 import type {OpenSpotlight} from '../GroupingKanbanColumn'
 import ReflectionGroupHeader from '../ReflectionGroupHeader'
 import ExpandedReflectionStack from '../RetroReflectPhase/ExpandedReflectionStack'
 import DraggableReflectionCard from './DraggableReflectionCard'
+import SuggestedGroupBadge, {type SuggestedGroupBadgeState} from './SuggestedGroupBadge'
 import useSpotlightReflectionGroup from './useSpotlightReflectionGroup'
-
-const CardStack = styled('div')({
-  position: 'relative'
-})
 
 export const getCardStackPadding = (count: number) => {
   return Math.max(0, Math.min(3, count) - 1) * ReflectionStackPerspective.Y
 }
 
-const Group = styled('div')<{
-  staticReflectionCount: number
-  isSpotlightSource: boolean
-}>(({staticReflectionCount, isSpotlightSource}) => ({
-  height: 'max-content',
-  position: 'relative',
-  paddingTop: ElementWidth.REFLECTION_CARD_PADDING,
-  paddingBottom: isSpotlightSource
-    ? ElementWidth.REFLECTION_CARD_PADDING
-    : ElementWidth.REFLECTION_CARD_PADDING + getCardStackPadding(staticReflectionCount),
-  transition: `padding-bottom ${Times.REFLECTION_DROP_DURATION}ms`
-}))
-
-const ReflectionWrapper = styled('div')<{
-  staticIdx: number
-  isDropping: boolean | null | undefined
-  groupCount: number
-  isHiddenSpotlightSource: boolean
-}>(({staticIdx, isDropping, groupCount, isHiddenSpotlightSource}) => {
-  const isHidden = staticIdx === -1 || isDropping || isHiddenSpotlightSource
-  const multiple = Math.max(0, Math.min(staticIdx, 2))
-  const scaleX =
-    (ElementWidth.REFLECTION_CARD - ReflectionStackPerspective.X * multiple * 2) /
-    ElementWidth.REFLECTION_CARD
-  const translateY = ReflectionStackPerspective.Y * multiple
-  return {
-    position: staticIdx === 0 || (staticIdx === -1 && groupCount === 1) ? 'relative' : 'absolute',
-    bottom: 0,
-    left: 0,
-    outline: 0,
-    transform: `translateY(${translateY}px) scaleX(${scaleX})`,
-    transition: isHidden ? undefined : `transform ${Times.REFLECTION_DROP_DURATION}ms`,
-    visibility: isHidden ? 'hidden' : undefined,
-    zIndex: 3 - multiple
-  }
-})
-
 interface Props {
-  phaseRef: RefObject<HTMLDivElement>
+  phaseRef: RefObject<HTMLDivElement | null>
   meetingRef: ReflectionGroup_meeting$key
+  onHoverReflection?: (reflectionId: string | null) => void
+  /** Merges every currently-matched group (similarity === 1) into this one. See GroupingKanban. */
+  onGroupMatches?: (reflectionGroupId: string) => void
+  onArmGroupMatches?: (isArmed: boolean) => void
+  /** The Group button is hovered, so the source and its matches all light up together */
+  isGroupMatchArmed?: boolean
+  /** This group is named by a suggestion that would still merge it with another. See GroupingKanban */
+  hasSuggestion?: boolean
   openSpotlight?: OpenSpotlight
   reflectionGroupRef: ReflectionGroup_reflectionGroup$key
   swipeColumn?: SwipeColumn
-  dataCy?: string
   reflectionIdsToHide?: string[] | null
-  isSpotlightEntering?: boolean
   showDragHintAnimation?: boolean
 }
 
 const ReflectionGroup = (props: Props) => {
   const {
     meetingRef,
+    onHoverReflection,
+    onGroupMatches,
+    onArmGroupMatches,
+    isGroupMatchArmed,
+    hasSuggestion,
     openSpotlight,
     phaseRef,
     reflectionGroupRef,
     swipeColumn,
-    dataCy,
     reflectionIdsToHide,
-    isSpotlightEntering,
     showDragHintAnimation
   } = props
   const meeting = useFragment(
@@ -125,6 +95,7 @@ const ReflectionGroup = (props: Props) => {
         sortOrder
         titleIsUserDefined
         title
+        activeReflectionGroupSimilarity
         reflections {
           ...DraggableReflectionCard_reflection
           ...DraggableReflectionCard_staticReflections
@@ -150,7 +121,13 @@ const ReflectionGroup = (props: Props) => {
   const {localPhase, localStage, spotlightGroup} = meeting
   const {phaseType} = localPhase
   const {isComplete} = localStage
-  const {id: reflectionGroupId, titleIsUserDefined} = reflectionGroup
+  const {
+    id: reflectionGroupId,
+    titleIsUserDefined,
+    activeReflectionGroupSimilarity: similarityScore,
+    reflections
+  } = reflectionGroup
+  const isSourceBeingDragged = reflections.some((r) => r.isViewerDragging)
   const spotlightGroupId = spotlightGroup?.id
   const isSpotlightSrcGroup = spotlightGroupId === reflectionGroupId
   const isBehindSpotlight = !!(spotlightGroupId && openSpotlight)
@@ -169,6 +146,11 @@ const ReflectionGroup = (props: Props) => {
         !reflection.isViewerDragging && (!reflection.remoteDrag || reflection.isDropping)
     )
   }, [visibleReflections])
+  const prevCountRef = useRef(staticReflections.length)
+  const skipTransition = staticReflections.length < prevCountRef.current
+  useEffect(() => {
+    prevCountRef.current = staticReflections.length
+  })
   const stackRef = useRef<HTMLDivElement>(null)
   const {setItemsRef, scrollRef, bgRef, modalHeaderRef, portal, portalStatus, collapse, expand} =
     useExpandedReflections(groupRef, stackRef, visibleReflections.length, headerRef)
@@ -221,6 +203,31 @@ const ReflectionGroup = (props: Props) => {
     (phaseType !== GROUP || titleIsUserDefined || visibleReflections.length > 1 || isEditing) &&
     !isSpotlightSrcGroup
 
+  // This is the hovered/source card: its matches (score === 1, on other groups) are ringed too
+  const isHoverSource = similarityScore === -1 && !isSourceBeingDragged
+  // Similarity resolves a reflection to its group, so any card in the stack keeps this group hovered
+  const hoverReflectionId = visibleReflections[0]?.id
+  // Arming the merge lights the source and every match in the button's own hover color, so the set
+  // reads as one unit. Grape is categorical and doesn't flip with the theme, hence the dark variant
+  const litRingClass = isGroupMatchArmed ? 'ring-grape-700 dark:ring-grape-500' : 'ring-grape-600'
+  // A dropping card is visibility:hidden while its clone flies to the slot, so the group's box is
+  // partly empty space. Outlining it would ring where the card is headed, not the card the viewer
+  // sees — so hold every highlight until the stack has settled
+  const isSettled = !visibleReflections.some((reflection) => reflection.isDropping)
+  const showRing = similarityScore != null && (similarityScore > 0 || isHoverSource) && isSettled
+  // The badge hangs off a card, so it needs one on screen to pin it to
+  const hasVisibleCard = isSettled && staticReflections.length > 0
+  const badgeState: SuggestedGroupBadgeState | null =
+    !hasVisibleCard || (isSpotlightSrcGroup && isBehindSpotlight)
+      ? null
+      : isHoverSource && onGroupMatches
+        ? 'source'
+        : similarityScore != null && similarityScore !== -1
+          ? 'match'
+          : hasSuggestion
+            ? 'idle'
+            : null
+
   return (
     <>
       {portal(
@@ -248,16 +255,13 @@ const ReflectionGroup = (props: Props) => {
           isBehindSpotlight={isBehindSpotlight}
         />
       )}
-      <Group
+      <div
+        className='relative h-max py-1.5'
         {...(disableDrop ? null : {[DragAttribute.DROPPABLE]: reflectionGroupId})}
         ref={groupRef}
-        staticReflectionCount={staticReflections.length}
-        isSpotlightSource={isSpotlightSrcGroup && !isBehindSpotlight}
-        data-cy={dataCy}
       >
         {showHeader && (
           <ReflectionGroupHeader
-            dataCy={`${dataCy}-header`}
             ref={headerRef}
             meeting={meeting}
             reflectionGroup={reflectionGroup}
@@ -265,38 +269,83 @@ const ReflectionGroup = (props: Props) => {
             titleInputRef={titleInputRef}
           />
         )}
-        <CardStack data-cy={`${dataCy}-stack`} ref={stackRef} onClick={onClick}>
-          {visibleReflections.map((reflection) => {
-            const staticIdx = staticReflections.indexOf(reflection)
-            const {id: reflectionId, isDropping} = reflection
-            return (
-              <ReflectionWrapper
-                data-cy={`${dataCy}-card-${staticIdx}`}
-                key={reflectionId}
-                groupCount={visibleReflections.length}
-                staticIdx={staticIdx}
-                isDropping={isDropping}
-                isHiddenSpotlightSource={isSpotlightSrcGroup && isBehindSpotlight}
-              >
-                <DraggableReflectionCard
-                  dataCy={`${dataCy}-card-${staticIdx}`}
-                  key={reflection.id}
-                  staticIdx={staticIdx}
-                  isClipped={staticIdx > 0 || isRemoteSpotlightSrc}
-                  isDraggable={staticIdx === 0 && !isRemoteSpotlightSrc}
-                  meeting={meeting}
-                  openSpotlight={openSpotlight}
-                  reflection={reflection}
-                  staticReflections={staticReflections}
-                  swipeColumn={swipeColumn}
-                  isSpotlightEntering={!!isSpotlightEntering}
-                  showDragHintAnimation={showDragHintAnimation}
-                />
-              </ReflectionWrapper>
-            )
-          })}
-        </CardStack>
-      </Group>
+        <div
+          className={cn('relative', showRing && 'rounded ring-2', showRing && litRingClass)}
+          style={{
+            paddingBottom:
+              isSpotlightSrcGroup && !isBehindSpotlight
+                ? 0
+                : getCardStackPadding(staticReflections.length),
+            transition: skipTransition
+              ? 'box-shadow 150ms ease'
+              : `padding-bottom ${Times.REFLECTION_DROP_DURATION}ms, box-shadow 150ms ease`
+          }}
+        >
+          <div className='relative' ref={stackRef} onClick={onClick}>
+            {visibleReflections.map((reflection) => {
+              const staticIdx = staticReflections.indexOf(reflection)
+              const {id: reflectionId, isDropping} = reflection
+              const isHidden =
+                staticIdx === -1 || isDropping || (isSpotlightSrcGroup && isBehindSpotlight)
+              const multiple = Math.max(0, Math.min(staticIdx, 2))
+              const scaleX =
+                (ElementWidth.REFLECTION_CARD - ReflectionStackPerspective.X * multiple * 2) /
+                ElementWidth.REFLECTION_CARD
+              const translateY = ReflectionStackPerspective.Y * multiple
+              return (
+                <div
+                  key={reflectionId}
+                  className={cn(
+                    'bottom-0 left-0 outline-0',
+                    staticIdx === 0 || (staticIdx === -1 && visibleReflections.length === 1)
+                      ? 'relative'
+                      : 'absolute',
+                    isHidden && 'invisible'
+                  )}
+                  style={{
+                    transform: `translateY(${translateY}px) scaleX(${scaleX})`,
+                    transition:
+                      isHidden || skipTransition
+                        ? undefined
+                        : `transform ${Times.REFLECTION_DROP_DURATION}ms`,
+                    zIndex: 3 - multiple
+                  }}
+                >
+                  <DraggableReflectionCard
+                    key={reflection.id}
+                    staticIdx={staticIdx}
+                    isClipped={staticIdx > 0 || isRemoteSpotlightSrc}
+                    isDraggable={staticIdx === 0 && !isRemoteSpotlightSrc}
+                    meeting={meeting}
+                    onHoverReflection={onHoverReflection}
+                    openSpotlight={openSpotlight}
+                    reflection={reflection}
+                    staticReflections={staticReflections}
+                    swipeColumn={swipeColumn}
+                    showDragHintAnimation={showDragHintAnimation}
+                  />
+                </div>
+              )
+            })}
+          </div>
+          <AnimatePresence>
+            {badgeState && (
+              <SuggestedGroupBadge
+                state={badgeState}
+                isGroupMatchArmed={isGroupMatchArmed}
+                onGroup={() => onGroupMatches?.(reflectionGroupId)}
+                // The badge sits above the card, so reaching it fires the card's onMouseLeave.
+                // Re-asserting the hover here cancels that pending clear before the badge shrinks
+                onHoverGroup={() => {
+                  if (hoverReflectionId) onHoverReflection?.(hoverReflectionId)
+                  onArmGroupMatches?.(true)
+                }}
+                onLeaveGroup={() => onHoverReflection?.(null)}
+              />
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
     </>
   )
 }

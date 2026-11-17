@@ -1,18 +1,25 @@
-import {mergeAttributes, type NodeConfig, type Range} from '@tiptap/core'
+import {createBlockMarkdownSpec, mergeAttributes, type NodeConfig} from '@tiptap/core'
 import {Image} from '@tiptap/extension-image'
 
+export interface ImageBlockStorage {
+  editorWidth: number
+  editorHeight: number
+}
+
 declare module '@tiptap/core' {
+  interface Storage {
+    imageBlock: ImageBlockStorage
+  }
   interface Commands<ReturnType> {
     imageBlock: {
-      setImageBlock: (attributes: {src: string}) => ReturnType
-      setImageBlockAt: (attributes: {src: string; pos: number | Range}) => ReturnType
+      setImageBlock: (attributes: {src: string; pos?: number | Range}) => ReturnType
       setImageBlockAlign: (align: 'left' | 'center' | 'right') => ReturnType
       setImageBlockWidth: (width: number) => ReturnType
     }
   }
 }
 
-export const ImageBlockBase = Image.extend({
+export const ImageBlockBase = Image.extend<ImageBlockStorage, ImageBlockStorage>({
   name: 'imageBlock',
 
   group: 'block',
@@ -20,6 +27,20 @@ export const ImageBlockBase = Image.extend({
   defining: true,
 
   isolating: true,
+
+  addOptions() {
+    return {
+      editorWidth: 300,
+      editorHeight: 112
+    }
+  },
+
+  addStorage(this) {
+    return {
+      editorWidth: this.options.editorWidth,
+      editorHeight: this.options.editorHeight
+    }
+  },
 
   parseHTML() {
     return [
@@ -41,6 +62,10 @@ export const ImageBlockBase = Image.extend({
       {style: `width: 100%; display: flex; justify-content: ${justify};`},
       ['img', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)]
     ]
-  }
+  },
+  ...createBlockMarkdownSpec({
+    nodeName: 'imageBlock',
+    serializeAttributes: ({alt, src}) => `[${alt || ''}](${src})`
+  })
   // TipTap v3 got some types wrong, this cast shouldn't be necessary
 } as NodeConfig)

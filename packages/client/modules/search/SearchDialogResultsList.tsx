@@ -1,0 +1,67 @@
+import graphql from 'babel-plugin-relay/macro'
+import type {Ref} from 'react'
+import {useFragment} from 'react-relay'
+import type {SearchDialogResultsList_edges$key} from '../../__generated__/SearchDialogResultsList_edges.graphql'
+import type {ResultsListRefHandler} from './SearchDialogContent'
+import {SearchDialogResult} from './SearchDialogResult'
+import {SearchResultSectionHeader} from './SearchResultSectionHeader'
+import {useSearchListNavigation} from './useSearchListNavigation'
+
+interface Props {
+  edgesRef: SearchDialogResultsList_edges$key
+  title: string
+  closeSearch: () => void
+  resultsListRef: Ref<ResultsListRefHandler>
+  query: string
+  selectedId: string | null
+  setSelectedId: (id: string | null) => void
+}
+
+export const SearchDialogResultsList = (props: Props) => {
+  const {edgesRef, title, closeSearch, resultsListRef, query, selectedId, setSelectedId} = props
+  const edges = useFragment(
+    graphql`
+        fragment SearchDialogResultsList_edges on SearchResultEdge @relay(plural: true) {
+          ...SearchDialogResult_edge
+          node {
+            ... on Page {
+              id
+              ...getSearchResultHref_page
+            }
+          }
+        }
+      `,
+    edgesRef
+  )
+  const {selectedIndex, setSelectedIndex} = useSearchListNavigation(
+    resultsListRef,
+    edges,
+    closeSearch,
+    selectedId,
+    setSelectedId
+  )
+  if (edges.length === 0) {
+    return <div className='px-2 py-6 text-center text-fg-muted text-sm'>{'No pages found'}</div>
+  }
+  return (
+    <>
+      <SearchResultSectionHeader title={title} />
+      {edges.map((edge, index) => {
+        const {node} = edge
+        const {id} = node
+        return (
+          <SearchDialogResult
+            edgeRef={edge}
+            key={id}
+            closeSearch={closeSearch}
+            isActive={index === selectedIndex}
+            setSelectedIndex={() => {
+              setSelectedIndex(index)
+            }}
+            query={query}
+          />
+        )
+      })}
+    </>
+  )
+}

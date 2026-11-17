@@ -7,12 +7,12 @@ const PublicRoot: PublicRootResolvers = {
     const [dbId] = CipherId.fromClient(pageId)
     const [page, access] = await Promise.all([
       dataLoader.get('pages').load(dbId),
-      dataLoader.get('pageAccessByUserId').load({pageId: dbId, userId: authToken?.sub ?? ''})
+      dataLoader.get('pageAccessByPageIdUserId').load({pageId: dbId, userId: authToken?.sub ?? ''})
     ])
     if (!page) throw new GraphQLError('Page not found', {extensions: {code: 'NOT_FOUND'}})
     if (!access)
       throw new GraphQLError('Viewer does not have access to page', {
-        extensions: {code: 'UNAUTHORIZED'}
+        extensions: {code: 'FORBIDDEN'}
       })
     return page
   }

@@ -1,0 +1,45 @@
+import {GraphQLError} from 'graphql'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {getUserId} from '../../../utils/authorization'
+import publish from '../../../utils/publish'
+import resolveDowngradeToStarter from '../../mutations/helpers/resolveDowngradeToStarter'
+import type {MutationResolvers} from '../resolverTypes'
+
+const downgradeToStarter: MutationResolvers['downgradeToStarter'] = async (
+  _source,
+  {orgId, otherTool},
+  {authToken, dataLoader, socketId: mutatorId}
+) => {
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+
+  const viewerId = getUserId(authToken)
+  const viewer = await dataLoader.get('users').loadNonNull(viewerId)
+
+  // VALIDATION
+  if (otherTool && otherTool?.length > 100) {
+    throw new GraphQLError('Other tool name is too long', {extensions: {code: 'BAD_USER_INPUT'}})
+  }
+
+  const {stripeSubscriptionId, tier} = await dataLoader.get('organizations').loadNonNull(orgId)
+  dataLoader.get('organizations').clear(orgId)
+
+  if (tier === 'starter') {
+    throw new GraphQLError('Already on free tier', {extensions: {code: 'CONFLICT'}})
+  }
+
+  // RESOLUTION
+  await resolveDowngradeToStarter(orgId, stripeSubscriptionId!, viewer, dataLoader)
+  const teams = await dataLoader.get('teamsByOrgIds').load(orgId)
+  const teamIds = teams.map(({id}) => id)
+  const data = {orgId, teamIds}
+  publish(SubscriptionChannel.ORGANIZATION, orgId, 'DowngradeToStarterPayload', data, subOptions)
+
+  teamIds.forEach((teamId) => {
+    const teamData = {orgId, teamIds: [teamId]}
+    publish(SubscriptionChannel.TEAM, teamId, 'DowngradeToStarterPayload', teamData, subOptions)
+  })
+  return data
+}
+
+export default downgradeToStarter

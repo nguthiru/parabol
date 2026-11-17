@@ -4,13 +4,10 @@ import utcPlugin from 'dayjs/plugin/utc'
 import * as React from 'react'
 import {type PropsWithChildren, useEffect} from 'react'
 import {Frequency, RRule} from 'rrule'
-import {MenuPosition} from '../../hooks/useCoords'
-import useMenu from '../../hooks/useMenu'
 import {fromRRuleDateTime, toRRuleDateTime} from '../../shared/rruleUtil'
 import {cn} from '../../ui/cn'
 import {ALL_DAYS, type Day, toHumanReadable} from '../../utils/humanReadableRecurrenceRule'
 import plural from '../../utils/plural'
-import DropdownMenuToggle from '../DropdownMenuToggle'
 import {RecurrenceDayCheckbox} from './RecurrenceDayCheckbox'
 import {RecurrenceTimePicker} from './RecurrenceTimePicker'
 
@@ -23,7 +20,7 @@ const Label = ({
   ...rest
 }: PropsWithChildren<React.LabelHTMLAttributes<HTMLLabelElement>>) => {
   return (
-    <label className={cn('font-semibold text-slate-800 text-sm', className)} {...rest}>
+    <label className={cn('font-semibold text-fg-primary text-sm', className)} {...rest}>
       {children}
     </label>
   )
@@ -42,11 +39,11 @@ const Input = ({
   } & React.InputHTMLAttributes<HTMLInputElement>
 >) => {
   const focusStyles =
-    'focus:outline-hidden focus:border-slate-600 focus:ring-1 focus:ring-slate-600'
+    'focus:outline-hidden focus:border-fg-secondary focus:ring-1 focus:ring-fg-secondary'
   const activeStyles =
-    'active:border-slate-600 active:outline active:outline-slate-600 active:outline-1'
+    'active:border-fg-secondary active:outline active:outline-fg-secondary active:outline-1'
   const baseStyles =
-    'form-input text-base font-sans p-2 border border-solid border-slate-500 rounded-sm hover:border-slate-600'
+    'form-input text-base font-sans p-2 border border-solid border-hairline-field bg-surface-input rounded-sm hover:border-fg-secondary'
   const errorStyles =
     'border-tomato-600 focus:border-tomato-600 focus:ring-tomato-600 active:border-tomato-600 active:outline-tomato-600'
 
@@ -80,7 +77,7 @@ const Description = ({
   ...rest
 }: PropsWithChildren<React.HTMLAttributes<HTMLDivElement>>) => {
   return (
-    <div className={cn('break-words text-slate-600 text-sm italic', className)} {...rest}>
+    <div className={cn('break-words text-fg-secondary text-sm italic', className)} {...rest}>
       {children}
     </div>
   )
@@ -88,7 +85,7 @@ const Description = ({
 
 const Error = ({children, ...rest}: PropsWithChildren<React.HTMLAttributes<HTMLDivElement>>) => {
   return (
-    <div className='text-sm text-tomato-500' {...rest}>
+    <div className='text-fg-error text-sm' {...rest}>
       {children}
     </div>
   )
@@ -109,10 +106,12 @@ export interface RecurrenceSettings {
 interface Props {
   onRruleUpdated: (rrule: RRule | null) => void
   rrule: RRule | null
+  gcalStartTime?: Dayjs
+  className?: string
 }
 
 export const RecurrenceSettings = (props: Props) => {
-  const {onRruleUpdated, rrule} = props
+  const {onRruleUpdated, rrule, gcalStartTime, className} = props
   const [recurrenceInterval, setRecurrenceInterval] = React.useState(
     rrule ? rrule.options.interval : 1
   )
@@ -126,16 +125,13 @@ export const RecurrenceSettings = (props: Props) => {
   const [recurrenceStartTime, setRecurrenceStartTime] = React.useState<Dayjs>(
     rrule
       ? fromRRuleDateTime(rrule)
-      : dayjs.tz(dayjs().add(1, 'day').startOf('day').add(6, 'hour'), timeZone) // suggest 6:00 AM tomorrow
+      : (gcalStartTime ?? dayjs.tz(dayjs().add(1, 'hour').startOf('hour'), timeZone))
   )
 
-  const {menuPortal, togglePortal, menuProps, originRef} = useMenu<HTMLDivElement>(
-    MenuPosition.LOWER_LEFT,
-    {
-      id: 'recurrenceStartTimePicker',
-      isDropdown: true
-    }
-  )
+  useEffect(() => {
+    if (!gcalStartTime) return
+    setRecurrenceStartTime(gcalStartTime)
+  }, [gcalStartTime?.unix()])
 
   const handleIntervalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     try {
@@ -173,10 +169,10 @@ export const RecurrenceSettings = (props: Props) => {
   }, [recurrenceDays, recurrenceInterval, recurrenceStartTime])
 
   return (
-    <div className='space-y-4 p-4'>
+    <div className={cn('space-y-4 p-4', className)}>
       <div className='space-y-1'>
         <div className='flex items-center gap-2'>
-          <label className='block text-slate-800 text-sm' htmlFor='series-interval'>
+          <label className='block text-fg-primary text-sm' htmlFor='series-interval'>
             Restarts every
           </label>
           <Input
@@ -195,7 +191,7 @@ export const RecurrenceSettings = (props: Props) => {
       </div>
       <div className='space-y-1'>
         <Label>Repeats on</Label>
-        <div className='flex items-center justify-between'>
+        <div className='flex max-w-[368px] items-center justify-between'>
           {ALL_DAYS.map((day) => {
             const isSelected = recurrenceDays.some(
               (recurrenceDay) => recurrenceDay.intVal === day.intVal
@@ -222,16 +218,7 @@ export const RecurrenceSettings = (props: Props) => {
       </div>
       <div className='space-y-1'>
         <Label>Each instance starts at</Label>
-        <DropdownMenuToggle
-          className='w-full text-sm'
-          defaultText={`${recurrenceStartTime.format('h:mm A')} (${timeZone})`}
-          onClick={togglePortal}
-          ref={originRef}
-          size='small'
-        />
-        {menuPortal(
-          <RecurrenceTimePicker menuProps={menuProps} onClick={setRecurrenceStartTime} />
-        )}
+        <RecurrenceTimePicker value={recurrenceStartTime} onValueChange={setRecurrenceStartTime} />
       </div>
     </div>
   )

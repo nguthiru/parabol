@@ -10,6 +10,7 @@ import {
   UPDATES,
   VOTE
 } from 'parabol-client/utils/constants'
+import {positionAfter} from '../../../../client/shared/sortOrder'
 import toTeamMemberId from '../../../../client/utils/relay/toTeamMemberId'
 import AgendaItemsPhase from '../../../database/types/AgendaItemsPhase'
 import CheckInPhase from '../../../database/types/CheckInPhase'
@@ -25,7 +26,7 @@ import UpdatesStage from '../../../database/types/UpdatesStage'
 import type {DataLoaderInstance} from '../../../dataloader/RootDataLoader'
 import getKysely from '../../../postgres/getKysely'
 import type {MeetingTypeEnum} from '../../../postgres/types/Meeting'
-import type {NewMeetingPhase, NewMeetingStages} from '../../../postgres/types/NewMeetingPhase'
+import type {NewMeetingPhase, NewMeetingStage} from '../../../postgres/types/NewMeetingPhase'
 import type {DB} from '../../../postgres/types/pg'
 import isPhaseAvailable from '../../../utils/isPhaseAvailable'
 import type {DataLoaderWorker} from '../../graphql'
@@ -49,7 +50,7 @@ const getPastStageDurations = async (teamId: string, dataLoader: DataLoaderInsta
   const completedMeetings = await dataLoader.get('completedMeetingsByTeamId').load(teamId)
   const phases = completedMeetings.flatMap((meeting) => meeting.phases as NewMeetingPhase[])
   const stages = phases
-    .flatMap((phase) => phase.stages as NewMeetingStages[])
+    .flatMap((phase) => phase.stages as NewMeetingStage[])
     .map((stage) => ({
       phaseType: stage.phaseType,
       duration:
@@ -75,12 +76,12 @@ const createNewMeetingPhases = async <T extends NewMeetingPhase = NewMeetingPhas
   teamId: string,
   meetingId: string,
   meetingCount: number,
-  meetingType: MeetingTypeEnum,
+  meetingType: Exclude<MeetingTypeEnum, 'teamPrompt'>,
   dataLoader: DataLoaderWorker
 ) => {
   const pg = getKysely()
   const [meetingSettings, stageDurations, team] = await Promise.all([
-    dataLoader.get('meetingSettingsByType').load({teamId, meetingType}),
+    dataLoader.get('meetingSettingsByType').loadNonNull({teamId, meetingType}),
     getPastStageDurations(teamId, dataLoader),
     dataLoader.get('teams').loadNonNull(teamId)
   ])
@@ -98,7 +99,7 @@ const createNewMeetingPhases = async <T extends NewMeetingPhase = NewMeetingPhas
           return new CheckInPhase({
             teamId,
             meetingCount,
-            stages: [new CheckInStage(facilitatorTeamMemberId)]
+            stages: [new CheckInStage(facilitatorTeamMemberId, positionAfter(''))]
           })
         case 'TEAM_HEALTH':
           return new TeamHealthPhase({
@@ -129,7 +130,7 @@ const createNewMeetingPhases = async <T extends NewMeetingPhase = NewMeetingPhas
         case UPDATES:
           return new UpdatesPhase({
             durations,
-            stages: [new UpdatesStage(facilitatorTeamMemberId)]
+            stages: [new UpdatesStage(facilitatorTeamMemberId, positionAfter(''))]
           })
         case AGENDA_ITEMS: {
           const agendaItems = await dataLoader.get('agendaItemsByTeamId').load(teamId)

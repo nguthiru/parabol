@@ -1,15 +1,19 @@
-import {Add, DeleteOutline} from '@mui/icons-material'
-import {ColumnDef, flexRender, getCoreRowModel, useReactTable} from '@tanstack/react-table'
+import {HocuspocusProvider} from '@hocuspocus/provider'
+import {ColumnDef, getCoreRowModel, useReactTable} from '@tanstack/react-table'
 import {Editor} from '@tiptap/core'
 import {useMemo} from 'react'
-import * as Y from 'yjs'
 import {cn} from '../../../ui/cn'
+import {AppendCell} from './AppendCell'
+import {AppendHeader} from './AppendHeader'
+import {AppendRow} from './AppendRow'
 import {Cell} from './Cell'
-import {appendColumn, appendRow, deleteRow, RowId} from './data'
+import {getColumns, getRows, RowId} from './data'
 import {Header} from './Header'
-import {useDatabase} from './hooks'
+import {useYArray} from './hooks'
 import {ImportExport} from './ImportExport'
 import {MetaCell} from './MetaCell'
+import {TableBody} from './TableBody'
+import {TableHead} from './TableHead'
 
 // add additional debug columns
 const DEBUG = false
@@ -17,34 +21,35 @@ const DEBUG = false
 const getRowId = (row: RowId) => row
 
 type Props = {
-  doc: Y.Doc
+  provider: HocuspocusProvider
   userId?: string
   editor: Editor
 }
 
 export default function DatabaseView(props: Props) {
-  const {doc, editor, userId} = props
+  const {provider, editor, userId} = props
+  const doc = provider.document
 
-  const {rows, columns} = useDatabase(doc)
+  const columns = useYArray(getColumns(doc))
+  const rows = useYArray(getRows(doc))
 
   const dataColumns = useMemo(() => {
-    const dataColumns: ColumnDef<RowId>[] = columns.map((column) => {
-      const {id, ...meta} = column
-      const {type} = meta
-
+    const dataColumns: ColumnDef<RowId>[] = columns.map((columnId) => {
       return {
-        id,
+        id: columnId,
         size: 200,
         minSize: 100,
         maxSize: 500,
         enableResizing: true,
         header: () => (
           <>
-            <Header key={id} columnMeta={meta} doc={doc} columnId={id} />
-            {DEBUG && <div className='p-1 text-slate-600 text-xs'>{id}</div>}
+            <Header provider={provider} columnId={columnId} />
+            {DEBUG && <div className='p-1 text-fg-secondary text-xs'>{columnId}</div>}
           </>
         ),
-        cell: ({row}) => <Cell type={type} doc={doc} rowId={row.id} columnId={id} userId={userId} />
+        cell: ({row}) => (
+          <Cell provider={provider} rowId={row.id} columnId={columnId} userId={userId} />
+        )
       }
     })
     const debugColumns: ColumnDef<RowId>[] = !DEBUG
@@ -57,7 +62,7 @@ export default function DatabaseView(props: Props) {
             maxSize: 80,
             enableResizing: false,
             header: () => <div className='p-2 text-xs'>Row ID</div>,
-            cell: ({row}) => <div className='p-2 text-slate-600 text-xs'>{row.id}</div>
+            cell: ({row}) => <div className='p-2 text-fg-secondary text-xs'>{row.id}</div>
           },
           ...['_createdAt', '_createdBy', '_updatedAt', '_updatedBy'].map(
             (metaId) =>
@@ -81,22 +86,8 @@ export default function DatabaseView(props: Props) {
         size: 48,
         minSize: 48,
         enableResizing: false,
-        header: () => (
-          <div
-            className='flex w-full cursor-pointer items-center p-2 hover:bg-slate-100'
-            onClick={() => appendColumn(doc)}
-          >
-            <Add />
-          </div>
-        ),
-        cell: ({row}) => (
-          <div
-            className='group flex w-full cursor-pointer items-center p-2'
-            onClick={() => deleteRow(doc, row.id)}
-          >
-            <DeleteOutline className='invisible text-slate-600 group-hover:visible' />
-          </div>
-        )
+        header: () => <AppendHeader provider={provider} />,
+        cell: ({row}) => <AppendCell provider={provider} rowId={row.id} />
       }
     ] as ColumnDef<RowId>[]
   }, [columns])
@@ -112,80 +103,39 @@ export default function DatabaseView(props: Props) {
   const isResizing = table.getState().columnSizingInfo.isResizingColumn
 
   return (
-    <>
-      <div className='flex w-full flex-row justify-end'>
+    <div className='text-fg-primary text-sm leading-5'>
+      <div className='-top-9 absolute right-0 print:hidden'>
         <ImportExport doc={doc} editor={editor} />
       </div>
-      <div className='overflow-x-auto pb-2'>
-        <table
-          className={cn(
-            'relative min-w-full table-fixed border-collapse bg-white',
-            isResizing && 'select-none'
-          )}
-          style={{
-            width: table.getTotalSize()
-          }}
-          draggable={false}
-        >
-          <thead>
-            {table.getHeaderGroups().map((hg) => (
-              <tr key={hg.id} className='text-slate-600'>
-                {hg.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    className='border-slate-400 border-b-1 p-0'
-                    style={header.column.getCanResize() ? {width: header.getSize()} : {}}
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    {header.column.getCanResize() && (
-                      <div
-                        className={cn(
-                          '-right-1 absolute top-0 h-full w-2 cursor-col-resize touch-none select-none hover:bg-slate-300',
-                          header.column.getIsResizing() &&
-                            '-right-1 w-2 bg-sky-300 hover:bg-sky-300'
-                        )}
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                      />
-                    )}
-                  </th>
-                ))}
+      <div className='overflow-hidden rounded-lg border border-hairline bg-surface-card'>
+        <div className='overflow-x-auto'>
+          <table
+            className={cn(
+              // the editor's table styles set overflow: hidden, which would stop the footer label sticking to the scroll container
+              'overflow-visible! relative min-w-full table-fixed border-collapse',
+              isResizing && 'select-none'
+            )}
+            style={{
+              width: table.getTotalSize()
+            }}
+            draggable={false}
+          >
+            <TableHead table={table} />
+            <TableBody table={table} />
+            <tfoot>
+              <tr>
+                <td
+                  colSpan={columns.length + 1}
+                  className='h-9 pointer-coarse:h-11 p-0'
+                  contentEditable={false}
+                >
+                  <AppendRow provider={provider} userId={userId} />
+                </td>
               </tr>
-            ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row) => (
-              <tr key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className='border-slate-400 border-b-1 border-l-1 first:border-l-0'
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className='text-slate-600'>
-              <td
-                colSpan={columns.length + 1}
-                className='cursor-pointer hover:bg-slate-100'
-                onClick={() => appendRow(doc, userId)}
-                contentEditable={false}
-              >
-                <div className='w-full cursor-pointer hover:bg-slate-100'>
-                  <div className='sticky left-0 flex w-fit items-center gap-2 p-2'>
-                    <Add />
-                    New entry
-                  </div>
-                </div>
-              </td>
-            </tr>
-          </tfoot>
-        </table>
+            </tfoot>
+          </table>
+        </div>
       </div>
-    </>
+    </div>
   )
 }

@@ -1,12 +1,13 @@
-import type {ArchiveTimelineEventMutation_notification$data} from '__generated__/ArchiveTimelineEventMutation_notification.graphql'
 import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import {ConnectionHandler, type RecordSourceSelectorProxy} from 'relay-runtime'
 import safeRemoveNodeFromConn from '~/utils/relay/safeRemoveNodeFromConn'
 import type {ArchiveTimelineEventMutation as TArchiveTimelineEventMutation} from '../__generated__/ArchiveTimelineEventMutation.graphql'
+import type {ArchiveTimelineEventMutation_notification$data} from '../__generated__/ArchiveTimelineEventMutation_notification.graphql'
 import type {SharedUpdater, SimpleMutation} from '../types/relayMutations'
 import {parseQueryParams} from '../utils/useQueryParameterParser'
 import getUserTimelineEventsConn from './connections/getUserTimelineEventsConn'
+import {snackOnError} from './handlers/snackOnError'
 
 graphql`
   fragment ArchiveTimelineEventMutation_notification on ArchiveTimelineEventSuccess {
@@ -25,7 +26,7 @@ const mutation = graphql`
           message
         }
       }
-      ...ArchiveTimelineEventMutation_notification @relay(mask: false)
+      ...ArchiveTimelineEventMutation_notification @relay(mask: false) @alias
     }
   }
 `
@@ -71,6 +72,7 @@ const ArchiveTimelineEventMutation: SimpleMutation<TArchiveTimelineEventMutation
   return commitMutation<TArchiveTimelineEventMutation>(atmosphere, {
     mutation,
     variables,
+    onError: snackOnError(atmosphere),
     updater: (store) => {
       const payload = store.getRootField('archiveTimelineEvent')
       archiveTimelineEventNotificationUpdater(payload as any, {

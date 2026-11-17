@@ -1,22 +1,14 @@
 /**
- * Renders the UI for the reflection phase of the retrospective meeting
+ * Renders the UI for the group phase of the retrospective meeting
  *
  */
-import styled from '@emotion/styled'
-import {Info as InfoIcon} from '@mui/icons-material'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
 import type {RetroGroupPhase_meeting$key} from '~/__generated__/RetroGroupPhase_meeting.graphql'
 import useCallbackRef from '~/hooks/useCallbackRef'
-import useAtmosphere from '../hooks/useAtmosphere'
-import {MenuPosition} from '../hooks/useCoords'
-import useMutationProps from '../hooks/useMutationProps'
-import useTooltip from '../hooks/useTooltip'
-import AutogroupMutation from '../mutations/AutogroupMutation'
-import ResetReflectionGroupsMutation from '../mutations/ResetReflectionGroupsMutation'
-import {Elevation} from '../styles/elevation'
-import {Threshold} from '../types/constEnums'
+import useRightDrawer from '~/hooks/useRightDrawer'
 import {phaseLabelLookup} from '../utils/meetings/lookups'
+import AcceptAllSuggestedGroups from './AcceptAllSuggestedGroups'
 import GroupingKanban from './GroupingKanban'
 import MeetingContent from './MeetingContent'
 import MeetingHeaderAndPhase from './MeetingHeaderAndPhase'
@@ -25,21 +17,9 @@ import MeetingTopBar from './MeetingTopBar'
 import PhaseHeaderDescription from './PhaseHeaderDescription'
 import PhaseHeaderTitle from './PhaseHeaderTitle'
 import PhaseWrapper from './PhaseWrapper'
-import PrimaryButton from './PrimaryButton'
 import type {RetroMeetingPhaseProps} from './RetroMeeting'
 import StageTimerDisplay from './StageTimerDisplay'
-
-const ButtonWrapper = styled('div')({
-  display: 'flex',
-  alignItems: 'center',
-  padding: '16px 0px 8px 0px'
-})
-
-const StyledButton = styled(PrimaryButton)({
-  '&:hover, &:focus': {
-    boxShadow: Elevation.Z2
-  }
-})
+import SuggestedGroupsButton from './SuggestedGroupsButton'
 
 interface Props extends RetroMeetingPhaseProps {
   meeting: RetroGroupPhase_meeting$key
@@ -53,71 +33,24 @@ const RetroGroupPhase = (props: Props) => {
         ...StageTimerControl_meeting
         ...StageTimerDisplay_meeting
         ...GroupingKanban_meeting
+        ...SuggestedGroupsButton_meeting
+        ...AcceptAllSuggestedGroups_meeting
         id
         endedAt
         showSidebar
+        rightDrawerOpen
         localStage {
           isComplete
           phaseType
-        }
-        autogroupReflectionGroups {
-          groupTitle
-        }
-        resetReflectionGroups {
-          groupTitle
-        }
-        organization {
-          tier
-          useAI
-        }
-        team {
-          qualAIMeetingsCount
         }
       }
     `,
     meetingRef
   )
   const [callbackRef, phaseRef] = useCallbackRef()
-  const atmosphere = useAtmosphere()
-  const {onError, onCompleted} = useMutationProps()
-  const {
-    id: meetingId,
-    endedAt,
-    showSidebar,
-    organization,
-    autogroupReflectionGroups,
-    resetReflectionGroups,
-    localStage,
-    team
-  } = meeting
-  const {useAI, tier} = organization
-  const {qualAIMeetingsCount} = team
-  const teamOverLimit = qualAIMeetingsCount >= Threshold.MAX_QUAL_AI_MEETINGS && tier === 'starter'
+  const {id: meetingId, endedAt, showSidebar, rightDrawerOpen, localStage} = meeting
+  const [toggleDrawer] = useRightDrawer(meetingId, 'inspiration', false)
   const isGroupPhaseActive = localStage?.phaseType === 'group' && !localStage?.isComplete
-  const {openTooltip, closeTooltip, tooltipPortal, originRef} = useTooltip<HTMLDivElement>(
-    MenuPosition.UPPER_CENTER
-  )
-  const showSuggestGroups = !resetReflectionGroups // resetReflectionGroups only exists after clicking suggest groups and is removed after clicking reset
-  const tooltipSuggestGroupsText = `Click to group cards by common topics. Don't worry, you'll be able to undo this! ${
-    tier === 'starter'
-      ? `This is a premium feature that we'll share with you during your first few retros.`
-      : ''
-  }`
-  const tooltipResetText = `Reset your groups to the way they were before you clicked Suggest Groups`
-  const teamOverLimitText = `You have reached the limit. Please upgrade to a paid plan to continue using this feature.`
-  const tooltipText = showSuggestGroups
-    ? teamOverLimit
-      ? teamOverLimitText
-      : tooltipSuggestGroupsText
-    : tooltipResetText
-
-  const handleAutoGroupClick = () => {
-    AutogroupMutation(atmosphere, {meetingId}, {onError, onCompleted})
-  }
-
-  const handleResetGroupsClick = () => {
-    ResetReflectionGroupsMutation(atmosphere, {meetingId}, {onError, onCompleted})
-  }
 
   return (
     <>
@@ -127,47 +60,21 @@ const RetroGroupPhase = (props: Props) => {
           <MeetingTopBar
             avatarGroup={avatarGroup}
             isMeetingSidebarCollapsed={!showSidebar}
+            rightDrawerOpen={rightDrawerOpen}
+            drawerType='inspiration'
             toggleSidebar={toggleSidebar}
+            toggleDrawer={toggleDrawer}
           >
             <PhaseHeaderTitle>{phaseLabelLookup.group}</PhaseHeaderTitle>
             <PhaseHeaderDescription>
               {'Drag cards to group by common topics'}
             </PhaseHeaderDescription>
-            {useAI &&
-              (showSuggestGroups ? (
-                <ButtonWrapper>
-                  <StyledButton
-                    disabled={
-                      !autogroupReflectionGroups?.length || !isGroupPhaseActive || teamOverLimit
-                    }
-                    onClick={handleAutoGroupClick}
-                  >
-                    {'Suggest Groups ✨'}
-                  </StyledButton>
-                  <div
-                    onMouseEnter={openTooltip}
-                    onMouseLeave={closeTooltip}
-                    className='ml-2 h-6 w-6 cursor-pointer text-slate-600'
-                    ref={originRef}
-                  >
-                    <InfoIcon />
-                  </div>
-                </ButtonWrapper>
-              ) : (
-                <ButtonWrapper>
-                  <StyledButton disabled={!isGroupPhaseActive} onClick={handleResetGroupsClick}>
-                    {'Reset Groups'}
-                  </StyledButton>
-                  <div
-                    onMouseEnter={openTooltip}
-                    onMouseLeave={closeTooltip}
-                    className='ml-2 h-6 w-6 cursor-pointer text-slate-600'
-                    ref={originRef}
-                  >
-                    <InfoIcon />
-                  </div>
-                </ButtonWrapper>
-              ))}
+            {isGroupPhaseActive && (
+              <div className='flex items-center gap-2 pt-4 pb-2'>
+                <SuggestedGroupsButton meeting={meeting} />
+                <AcceptAllSuggestedGroups meeting={meeting} />
+              </div>
+            )}
           </MeetingTopBar>
           <PhaseWrapper>
             <StageTimerDisplay meeting={meeting} canUndo={true} />
@@ -177,7 +84,6 @@ const RetroGroupPhase = (props: Props) => {
           </PhaseWrapper>
         </MeetingHeaderAndPhase>
       </MeetingContent>
-      {tooltipPortal(tooltipText)}
     </>
   )
 }

@@ -1,5 +1,5 @@
 import graphql from 'babel-plugin-relay/macro'
-import {type RefObject, Suspense, useRef} from 'react'
+import {type RefObject, Suspense, useEffect, useRef} from 'react'
 import {useFragment} from 'react-relay'
 import useQueryLoaderNow from '~/hooks/useQueryLoaderNow'
 import spotlightResultsQuery, {
@@ -10,12 +10,11 @@ import SpotlightResults from './SpotlightResults'
 
 interface Props {
   meetingRef: SpotlightResultsRoot_meeting$key
-  phaseRef: RefObject<HTMLDivElement>
-  isSpotlightEntering: boolean
+  phaseRef: RefObject<HTMLDivElement | null>
 }
 
 const SpotlightResultsRoot = (props: Props) => {
-  const {meetingRef, phaseRef, isSpotlightEntering} = props
+  const {meetingRef, phaseRef} = props
   const meeting = useFragment(
     graphql`
       fragment SpotlightResultsRoot_meeting on RetrospectiveMeeting {
@@ -32,11 +31,14 @@ const SpotlightResultsRoot = (props: Props) => {
   const spotlightGroupId = spotlightGroup?.id
   const groupIdRef = useRef('')
   const nextGroupId = spotlightGroupId ?? ''
-  if (nextGroupId) {
-    groupIdRef.current = nextGroupId
-  }
+  const reflectionGroupId = nextGroupId || groupIdRef.current
+  useEffect(() => {
+    if (nextGroupId) {
+      groupIdRef.current = nextGroupId
+    }
+  }, [nextGroupId])
   const variables = {
-    reflectionGroupId: groupIdRef.current,
+    reflectionGroupId,
     searchQuery: spotlightSearchQuery ?? '',
     meetingId
   }
@@ -49,13 +51,7 @@ const SpotlightResultsRoot = (props: Props) => {
 
   return (
     <Suspense fallback={''}>
-      {queryRef && (
-        <SpotlightResults
-          phaseRef={phaseRef}
-          queryRef={queryRef}
-          isSpotlightEntering={isSpotlightEntering}
-        />
-      )}
+      {queryRef && <SpotlightResults phaseRef={phaseRef} queryRef={queryRef} />}
     </Suspense>
   )
 }

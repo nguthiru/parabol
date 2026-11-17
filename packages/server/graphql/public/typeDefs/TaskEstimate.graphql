@@ -27,9 +27,7 @@ type TaskEstimate {
   """
   label: String!
 
-  """
-  *The taskId that the estimate refers to
-  """
+  "The task this estimate belongs to"
   taskId: ID!
 
   """
@@ -37,9 +35,7 @@ type TaskEstimate {
   """
   userId: ID!
 
-  """
-  *The meetingId that the estimate occured in, if any
-  """
+  "The meeting where this estimate was set, if any"
   meetingId: ID
 
   """
@@ -55,5 +51,5 @@ type TaskEstimate {
   """
   If the task comes from jira, this is the jira field that the estimate refers to
   """
-  jiraFieldId: ID
+  jiraFieldId: ID @deprecated(reason: "Read push provenance server-side; no client uses this")
 }

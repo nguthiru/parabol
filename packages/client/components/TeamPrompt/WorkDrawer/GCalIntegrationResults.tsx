@@ -1,7 +1,8 @@
-import {OpenInNew} from '@mui/icons-material'
 import graphql from 'babel-plugin-relay/macro'
+import {useEffect} from 'react'
 import {type PreloadedQuery, usePreloadedQuery} from 'react-relay'
-import {Link} from 'react-router-dom'
+import {Link} from 'react-router'
+import {OpenInNew} from '~/ui/icons'
 import halloweenRetrospectiveTemplate from '../../../../../static/images/illustrations/halloweenRetrospectiveTemplate.png'
 import type {GCalIntegrationResultsQuery} from '../../../__generated__/GCalIntegrationResultsQuery.graphql'
 import GCalEventCard from './GCalEventCard'
@@ -10,11 +11,13 @@ interface Props {
   queryRef: PreloadedQuery<GCalIntegrationResultsQuery>
   order: 'DESC' | 'ASC'
   teamId: string
+  searchQuery: string
+  onResultCount: (searchQuery: string, count: number) => void
 }
 
 const GCalIntegrationResults = (props: Props) => {
-  const {queryRef, order, teamId} = props
-  const query = usePreloadedQuery(
+  const {queryRef, order, teamId, searchQuery, onResultCount} = props
+  const query = usePreloadedQuery<GCalIntegrationResultsQuery>(
     graphql`
       query GCalIntegrationResultsQuery($teamId: ID!, $startDate: DateTime!, $endDate: DateTime!) {
         viewer {
@@ -42,6 +45,13 @@ const GCalIntegrationResults = (props: Props) => {
     gcalResults?.reverse()
   }
 
+  // Report how many events this range returned so the parent can hide the AI draft UI
+  // when there's no work to draft from.
+  const resultCount = gcalResults?.length ?? 0
+  useEffect(() => {
+    onResultCount(searchQuery, resultCount)
+  }, [searchQuery, resultCount, onResultCount])
+
   const gcalEventsByDay = gcalResults?.reduce<{
     [day: string]: typeof gcalResults
   }>((eventsByDate, event) => {
@@ -59,14 +69,14 @@ const GCalIntegrationResults = (props: Props) => {
 
   return (
     <>
-      <div className='mt-4 flex h-full flex-col gap-y-4 overflow-auto px-4'>
+      <div className='mt-4 flex flex-col gap-y-4 px-4'>
         {gcalEventsByDay && Object.keys(gcalEventsByDay).length > 0 ? (
           <>
             {Object.entries(gcalEventsByDay).map(([dayString, events]) => {
               const date = new Date(dayString)
               return (
                 <div key={dayString} className='flex flex-col gap-y-2'>
-                  <div className='font-medium text-slate-600 text-sm'>
+                  <div className='font-medium text-fg-secondary text-sm'>
                     {date.toLocaleDateString('en-US', {
                       weekday: 'long',
                       month: 'long',
@@ -81,7 +91,7 @@ const GCalIntegrationResults = (props: Props) => {
             })}
             <a
               href='https://calendar.google.com'
-              className='mb-4 flex items-center justify-center font-semibold text-sky-500 text-sm hover:text-sky-400'
+              className='mb-4 flex items-center justify-center font-semibold text-accent text-sm hover:text-sky-400'
               target='_blank'
               rel='noopener noreferrer'
             >
@@ -89,14 +99,14 @@ const GCalIntegrationResults = (props: Props) => {
             </a>
           </>
         ) : (
-          <div className='-mt-14 flex h-full flex-col items-center justify-center'>
+          <div className='flex flex-col items-center pt-12'>
             <img className='w-20' src={halloweenRetrospectiveTemplate} />
             <div className='mt-7 w-2/3 text-center'>
               Looks like you don’t have any events to display
             </div>
             <Link
               to={`/team/${teamId}/integrations`}
-              className='mt-4 font-semibold text-sky-500 hover:text-sky-400'
+              className='mt-4 font-semibold text-accent hover:text-sky-400'
             >
               Review your Google Calendar configuration
             </Link>

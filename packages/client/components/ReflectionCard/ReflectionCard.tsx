@@ -17,6 +17,7 @@ import useMutationProps from '../../hooks/useMutationProps'
 import {useTipTapReflectionEditor} from '../../hooks/useTipTapReflectionEditor'
 import EditReflectionMutation from '../../mutations/EditReflectionMutation'
 import RemoveReflectionMutation from '../../mutations/RemoveReflectionMutation'
+import UngroupReflectionMutation from '../../mutations/UngroupReflectionMutation'
 import UpdateReflectionContentMutation from '../../mutations/UpdateReflectionContentMutation'
 import {isEqualWhenSerialized} from '../../shared/isEqualWhenSerialized'
 import {Breakpoint} from '../../types/constEnums'
@@ -24,8 +25,8 @@ import {cn} from '../../ui/cn'
 import isPhaseComplete from '../../utils/meetings/isPhaseComplete'
 import isTempId from '../../utils/relay/isTempId'
 import type {OpenSpotlight} from '../GroupingKanbanColumn'
-import {TipTapEditor} from '../promptResponse/TipTapEditor'
 import StyledError from '../StyledError'
+import {TipTapEditor} from '../TipTapEditor/TipTapEditor'
 import ColorBadge from './ColorBadge'
 import DeleteReflectionButton from './DeleteReflectionButton'
 import ReactjiSection from './ReactjiSection'
@@ -33,6 +34,7 @@ import ReflectionCardAuthor from './ReflectionCardAuthor'
 import ReflectionCardRoot from './ReflectionCardRoot'
 import SpotlightButton from './SpotlightButton'
 import SubmitReflectionButton from './SubmitReflectionButton'
+import UngroupButton from './UngroupButton'
 
 interface Props {
   isClipped?: boolean
@@ -40,8 +42,9 @@ interface Props {
   meetingRef: ReflectionCard_meeting$key
   openSpotlight?: OpenSpotlight
   stackCount?: number
+  groupSize?: number
+  isExpanded?: boolean
   showReactji?: boolean
-  dataCy?: string
   showDragHintAnimation?: boolean
 }
 
@@ -72,8 +75,9 @@ const ReflectionCard = (props: Props) => {
     isClipped,
     openSpotlight,
     stackCount,
+    groupSize,
+    isExpanded,
     showReactji,
-    dataCy,
     showDragHintAnimation
   } = props
   const reflection = useFragment(
@@ -155,7 +159,9 @@ const ReflectionCard = (props: Props) => {
   const isSpotlightOpen = !!spotlightGroupId
   const atmosphere = useAtmosphere()
   const reflectionDivRef = useRef<HTMLDivElement>(null)
-  const {onCompleted, submitting, submitMutation, error, onError} = useMutationProps()
+  const {onCompleted, submitting, submitMutation, error, onError} = useMutationProps({
+    errorDisplay: 'inline'
+  })
   const readOnly = getReadOnly(
     reflection,
     phaseType as NewMeetingPhaseTypeEnum,
@@ -210,7 +216,7 @@ const ReflectionCard = (props: Props) => {
   }, [])
 
   useEffect(() => {
-    if (!editor) return
+    if (!editor || editor.isDestroyed) return
     editor.commands.setSearchTerm(spotlightSearchQuery || '')
   }, [spotlightSearchQuery])
 
@@ -251,7 +257,7 @@ const ReflectionCard = (props: Props) => {
     if (isTempId(reflectionId) || readOnly) return
     // Creating a reflection in the group phase is different than in reflect phase. We're creating an empty reflection and start editing it.
     // For the user however we want to have a consistent behaviour with the reflect phase. This means when they blur without editing, we don't want to submit the reflection.
-    if (isFirstEdit) return
+    if (isFirstEdit && editor?.isEmpty) return
     const newFocusedElement = e.relatedTarget as Node
     // don't trigger a blur if a button inside the element is clicked
     if (e.currentTarget.contains(newFocusedElement)) return
@@ -312,9 +318,20 @@ const ReflectionCard = (props: Props) => {
     RemoveReflectionMutation(atmosphere, {reflectionId}, {meetingId, onError, onCompleted})
   }
 
+  const handleClickUngroup = (e: MouseEvent) => {
+    e.stopPropagation()
+    if (isExpanded) {
+      UngroupReflectionMutation(atmosphere, {reflectionId}, {onError, onCompleted})
+    } else {
+      UngroupReflectionMutation(atmosphere, {reflectionGroupId}, {onError, onCompleted})
+    }
+  }
+
   const enableSpotlight =
     phaseType === 'group' && !isSpotlightOpen && !isComplete && !isDemoRoute() && !isEditing
   const showSpotlight = enableSpotlight && (isHovering || !isDesktop)
+  const enableUngroup = phaseType === 'group' && !isComplete && !isEditing && (groupSize ?? 0) > 1
+  const showUngroupButton = enableUngroup && (isHovering || !isDesktop)
   const showEditButton = !readOnly && isFirstEdit
 
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -328,19 +345,18 @@ const ReflectionCard = (props: Props) => {
 
   return (
     <ReflectionCardRoot
-      data-cy={`${dataCy}-root`}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
       showDragHintAnimation={showDragHintAnimation}
       ref={reflectionDivRef}
-      className='py-3'
+      className={cn('py-2', isClipped && 'bg-surface-raised')}
       onFocus={handleEditorFocus}
       onBlur={handleEditorBlur}
     >
       <ColorBadge phaseType={phaseType as NewMeetingPhaseTypeEnum} reflection={reflection} />
       <div
         ref={scrollRef}
-        className={cn('relative w-full overflow-auto text-slate-700 text-sm leading-5')}
+        className={cn('relative w-full overflow-auto text-fg-primary text-sm leading-5')}
       >
         <TipTapEditor
           className={cn(
@@ -375,6 +391,11 @@ const ReflectionCard = (props: Props) => {
       {!readOnly && (
         <DeleteReflectionButton onMouseDown={preventPrematureBlur} onClick={handleDelete} />
       )}
+      <UngroupButton
+        onClick={handleClickUngroup}
+        showUngroupButton={showUngroupButton}
+        label={isExpanded ? 'Remove from group' : 'Ungroup all'}
+      />
       <SpotlightButton onClick={handleClickSpotlight} showSpotlight={showSpotlight} />
     </ReflectionCardRoot>
   )

@@ -1,26 +1,8 @@
-import styled from '@emotion/styled'
 import * as Popover from '@radix-ui/react-popover'
 import {useState} from 'react'
 import PlainButton from '~/components/PlainButton/PlainButton'
-import addReactjiSvg from '../../../../static/images/icons/add_reactji_24.svg'
+import {AddReactionOutlined as AddReactionOutlinedIcon} from '~/ui/icons'
 import ReactjiPicker from '../ReactjiPicker'
-
-const Button = styled(PlainButton)({
-  display: 'block',
-  height: 24,
-  lineHeight: '24px',
-  opacity: 0.5,
-  padding: '3px 0',
-  width: 24,
-  ':hover, :focus': {
-    opacity: 1
-  }
-})
-
-const AddIcon = styled('img')({
-  height: 18,
-  width: 18
-})
 
 interface Props {
   className?: string
@@ -40,13 +22,16 @@ const AddReactjiButton = (props: Props) => {
   return (
     <Popover.Root open={open} onOpenChange={onOpenChange} modal>
       <Popover.Trigger asChild>
-        <Button className={className}>
-          <AddIcon alt='' src={addReactjiSvg} />
-        </Button>
+        <PlainButton
+          aria-label='Add reaction'
+          className={`block h-6 w-6 py-0.75 leading-6 hover:text-fg-primary focus:text-fg-primary active:text-fg-primary ${className ?? ''}`}
+        >
+          <AddReactionOutlinedIcon className='h-4.5 w-4.5' />
+        </PlainButton>
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          className='z-10 data-[side=bottom]:animate-slide-down data-[side=top]:animate-slide-up'
+          className='z-20 data-[side=bottom]:animate-slide-down data-[side=top]:animate-slide-up'
           sideOffset={5}
         >
           <ReactjiPicker onClick={onClick} />

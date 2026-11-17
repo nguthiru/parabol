@@ -1,8 +1,8 @@
-import {useCallback, useEffect, useMemo, useState} from 'react'
+import {useCallback, useEffect, useState} from 'react'
 import * as Y from 'yjs'
 import useAtmosphere from '../../../hooks/useAtmosphere'
 import {DATABASE_CELL_MAX_CHARS} from '../../../utils/constants'
-import {ColumnId, ColumnMeta, getColumns, getRows, RowData, RowId} from './data'
+import {ColumnId, ColumnMeta, changeColumn, getDataEntries, getRowData, RowId} from './data'
 import {updateChangedAt} from './utils'
 
 const yMapToMap = <T>(ymap: Y.Map<T>): Map<string, T> => {
@@ -56,8 +56,7 @@ export const useYArray = <T>(yarray: Y.Array<T>) => {
 
 export const useCell = (doc: Y.Doc, rowId: RowId, columnId: ColumnId) => {
   const {viewerId} = useAtmosphere()
-  const data = doc.getMap<RowData>('data')
-  const row = data.get(rowId)
+  const row = getRowData(doc, rowId)
 
   const [value, setValueState] = useState<string | null>(() => row?.get(columnId) ?? null)
 
@@ -67,16 +66,16 @@ export const useCell = (doc: Y.Doc, rowId: RowId, columnId: ColumnId) => {
       setValueState(cellValue ?? null)
     }
 
-    const observer = (event: Y.YMapEvent<string>) => {
-      if (event.keysChanged.has(columnId)) {
+    const observer = (event: Map<string, unknown>) => {
+      if (event.has(columnId)) {
         updateValue()
       }
     }
     updateValue()
-    row?.observe(observer)
+    row?.on('change', observer)
 
     return () => {
-      row?.unobserve(observer)
+      row?.off('change', observer)
     }
   }, [row, columnId])
 
@@ -102,34 +101,56 @@ export const useCell = (doc: Y.Doc, rowId: RowId, columnId: ColumnId) => {
 }
 
 export const useColumnValues = (doc: Y.Doc, columnId: ColumnId) => {
-  const data = doc.getMap<RowData>('data')
-  return Array.from(data.values())
-    .map((row) => row.get(columnId))
-    .filter(Boolean) as string[]
+  const entries = getDataEntries(doc)
+  const values = new Set<string>()
+  for (const [_, row] of entries) {
+    const value = row.get(columnId)
+    if (value) {
+      values.add(value.toString().trim())
+    }
+  }
+  return values
 }
 
-export const useDatabase = (doc: Y.Doc) => {
-  const columnIds = useYArray(getColumns(doc))
-  const rows = useYArray(getRows(doc))
-  const columnMeta = useYMap(doc.getMap<ColumnMeta>('columnMeta'))
+export const useColumnMeta = (doc: Y.Doc, columnId: ColumnId) => {
+  const columnMetaMap = doc.getMap<ColumnMeta>('columnMeta')
+  const [meta, setMetaState] = useState<ColumnMeta>(() => {
+    const existing = columnMetaMap.get(columnId)
+    return existing ?? {name: `<Unknown>`, type: 'text'}
+  })
 
-  const columns = useMemo(
-    () =>
-      columnIds.map((id, index) => {
-        let meta = columnMeta.get(id)
-        if (!meta) {
-          meta = {name: `Column ${index + 1}`, type: 'text'}
-          doc.getMap<ColumnMeta>('columnMeta').set(id, meta)
-        }
-        return {
-          id,
-          ...meta
-        }
-      }),
-    [columnIds, columnMeta]
+  useEffect(() => {
+    const updateMeta = () => {
+      const meta = columnMetaMap.get(columnId)
+      if (meta) {
+        setMetaState(meta)
+      }
+    }
+
+    const observer = (event: Y.YMapEvent<ColumnMeta>) => {
+      if (event.keysChanged.has(columnId)) {
+        updateMeta()
+      }
+    }
+    updateMeta()
+    columnMetaMap.observe(observer)
+
+    return () => {
+      columnMetaMap.unobserve(observer)
+    }
+  }, [columnMetaMap, columnId])
+
+  const setMeta = useCallback(
+    (newMeta: ColumnMeta) => {
+      changeColumn(doc, columnId, newMeta)
+    },
+    [doc, columnId, columnMetaMap]
   )
-  return {
-    rows,
-    columns
-  }
+
+  return [meta, setMeta] as const
+}
+
+export const useColumnType = (doc: Y.Doc, columnId: ColumnId) => {
+  const [meta] = useColumnMeta(doc, columnId)
+  return meta.type
 }

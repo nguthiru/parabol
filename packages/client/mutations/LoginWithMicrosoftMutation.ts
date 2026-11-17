@@ -2,7 +2,7 @@ import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import {handleSuccessfulLogin} from '~/utils/handleSuccessfulLogin'
 import type {LoginWithMicrosoftMutation as TLoginWithMicrosoftMutation} from '../__generated__/LoginWithMicrosoftMutation.graphql'
-import type {HistoryLocalHandler, StandardMutation} from '../types/relayMutations'
+import type {NavigateLocalHandler, StandardMutation} from '../types/relayMutations'
 import {handleAcceptTeamInvitationErrors} from './AcceptTeamInvitationMutation'
 import handleAuthenticationRedirect from './handlers/handleAuthenticationRedirect'
 
@@ -20,7 +20,7 @@ const mutation = graphql`
       invitationToken: $invitationToken
       params: $params
     ) {
-      error {
+      userErrors {
         message
       }
       ...handleSuccessfulLogin_UserLogInPayload @relay(mask: false)
@@ -34,8 +34,8 @@ const mutation = graphql`
 `
 const LoginWithMicrosoftMutation: StandardMutation<
   TLoginWithMicrosoftMutation,
-  HistoryLocalHandler
-> = (atmosphere, variables, {onError, onCompleted, history}) => {
+  NavigateLocalHandler
+> = (atmosphere, variables, {onError, onCompleted, navigate}) => {
   return commitMutation<TLoginWithMicrosoftMutation>(atmosphere, {
     mutation,
     variables: {...variables, isInvitation: !!variables.invitationToken},
@@ -43,13 +43,13 @@ const LoginWithMicrosoftMutation: StandardMutation<
     onCompleted: (res, errors) => {
       const {acceptTeamInvitation, loginWithMicrosoft} = res
       onCompleted({loginWithMicrosoft}, errors)
-      const {error: uiError} = loginWithMicrosoft
+      const [userError] = loginWithMicrosoft.userErrors
       handleAcceptTeamInvitationErrors(atmosphere, acceptTeamInvitation)
-      if (!uiError && !errors) {
+      if (!userError && !errors) {
         handleSuccessfulLogin(atmosphere, loginWithMicrosoft)
         handleAuthenticationRedirect(acceptTeamInvitation, {
           atmosphere,
-          history
+          navigate
         })
       }
     }

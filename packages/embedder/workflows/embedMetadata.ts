@@ -1,8 +1,12 @@
-import ms from 'ms'
-import getKysely from 'parabol-server/postgres/getKysely'
-import type {EmbeddingsTableName} from '../ai_models/AbstractEmbeddingsModel'
+import {sql} from 'kysely'
+import {pack} from 'msgpackr'
+import getKysely from '../../server/postgres/getKysely'
+import getRedis from '../../server/utils/getRedis'
+import {activeEmbeddingModelId} from '../activeEmbeddingModel'
 import getModelManager from '../ai_models/ModelManager'
+import type {ModelId} from '../ai_models/modelIdDefinitions'
 import type {JobQueueStepRun, ParentJob} from '../custom'
+import {getTSV} from '../getSupportedLanguages'
 import {createEmbeddingTextFrom, isEmbeddingOutdated} from '../indexing/createEmbeddingTextFrom'
 import numberVectorToString from '../indexing/numberVectorToString'
 import {JobQueueError} from '../JobQueueError'
@@ -11,16 +15,22 @@ import type {getSimilarRetroTopics} from './getSimilarRetroTopics'
 export const embedMetadata: JobQueueStepRun<
   {
     embeddingsMetadataId: number
-    model: EmbeddingsTableName
+    modelId: ModelId
     forceBuildText?: boolean
+    requestId?: number
+    channelName?: `embedderResponse:${string}`
   },
   ParentJob<typeof getSimilarRetroTopics>
 > = async (context) => {
   const {data, dataLoader} = context
   const pg = getKysely()
-  const {embeddingsMetadataId, model, forceBuildText} = data
+  const {embeddingsMetadataId, modelId, forceBuildText, requestId, channelName} = data
   const modelManager = getModelManager()
 
+  const embeddingModel = modelManager.getEmbedder(modelId)
+  if (!embeddingModel) {
+    return new JobQueueError(`embedding model ${modelId} not available`)
+  }
   const metadata = await dataLoader.get('embeddingsMetadata').load(embeddingsMetadataId)
 
   if (!metadata) return new JobQueueError(`Invalid embeddingsMetadataId: ${embeddingsMetadataId}`)
@@ -33,53 +43,62 @@ export const embedMetadata: JobQueueStepRun<
 
   if (updateFullText) {
     try {
-      const {body: fullText, language} = await createEmbeddingTextFrom(metadata, dataLoader)
+      const {body: fullText, language} = await createEmbeddingTextFrom(metadata, dataLoader, {
+        discussionText: embeddingModel.discussionText
+      })
       metadata.fullText = fullText
       metadata.language = language!
-      await pg
-        .updateTable('EmbeddingsMetadata')
-        .set({fullText, language})
-        .where('id', '=', embeddingsMetadataId)
-        .execute()
+      if (modelId === activeEmbeddingModelId) {
+        await pg
+          .updateTable('EmbeddingsMetadata')
+          .set({fullText, language})
+          .where('id', '=', embeddingsMetadataId)
+          .execute()
+      }
     } catch (e) {
-      return new JobQueueError(e as Error, undefined, 0, {
+      return new JobQueueError(e as Error, true, {
         forceBuildText: true
       })
     }
   }
   const {fullText, language} = metadata
 
-  const embeddingModel = modelManager.getEmbedder(model)
-  if (!embeddingModel) {
-    return new JobQueueError(`embedding model ${model} not available`)
-  }
   // Exit successfully, we don't want to fail the job because the language is not supported
-  if (!language || !embeddingModel.languages.includes(language)) return false
+  const tsvLanguage = getTSV(language)
+  if (!language || !tsvLanguage || !embeddingModel.languages.includes(language)) {
+    return new JobQueueError(
+      `Embedding object: ${embeddingsMetadataId} is written in unsupported language: ${language}`
+    )
+  }
   const chunks = await embeddingModel.chunkText(fullText!)
   if (chunks instanceof Error) {
-    return new JobQueueError(`unable to get tokens: ${chunks.message}`, ms('1m'), 10, {
+    return new JobQueueError(`unable to get tokens: ${chunks.message}`, true, {
       forceBuildText: true
     })
   }
   // Cannot use summarization strategy if generation model has same context length as embedding model
   // We must split the text & not tokens because BERT tokenizer is not trained for linebreaks e.g. \n\n
+  let firstChunkVector: number[] | undefined
   const errors = await Promise.all(
     chunks.map(async (chunk, chunkNumber) => {
-      const embeddingVector = await embeddingModel.getEmbedding(chunk)
+      const embeddingVector = await embeddingModel.getEmbedding(
+        metadata.objectType === 'retroReflection'
+          ? `${embeddingModel.reflectionPrompt}${chunk}`
+          : chunk
+      )
       if (embeddingVector instanceof Error) {
-        return new JobQueueError(
-          `unable to get embeddings: ${embeddingVector.message}`,
-          ms('1m'),
-          10,
-          {forceBuildText: true}
-        )
+        return new JobQueueError(`unable to get embeddings: ${embeddingVector.message}`, true, {
+          forceBuildText: true
+        })
       }
+      if (chunkNumber === 0) firstChunkVector = embeddingVector
       await pg
         // cast to any because these types won't be available in CI
         .insertInto(embeddingModel.tableName)
         .values({
           // TODO is the extra space of a null embedText really worth it?!
           embedText: chunks.length > 1 ? chunk : null,
+          tsv: sql<string>`to_tsvector('${sql.raw(tsvLanguage)}', ${chunk})`,
           embedding: numberVectorToString(embeddingVector),
           embeddingsMetadataId,
           chunkNumber: chunks.length > 1 ? chunkNumber : null
@@ -95,6 +114,12 @@ export const embedMetadata: JobQueueStepRun<
     })
   )
   const firstError = errors.find((error) => error instanceof JobQueueError)
+  if (!firstError && firstChunkVector && channelName && requestId) {
+    const msg = pack({vector: new Float32Array(firstChunkVector), requestId})
+    getRedis()
+      .publish(channelName, msg)
+      .catch(() => {})
+  }
   // Logger.log(`Embedded ${embeddingsMetadataId} -> ${model}`)
   return firstError || data
 }

@@ -1,15 +1,20 @@
-const tsJestPresets = require('ts-jest/presets')
-
 module.exports = {
   testEnvironment: 'node',
   transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
+    '^.+\\.(t|j)sx?$': [
+      '@swc/jest',
       {
-        diagnostics: false
+        jsc: {
+          transform: {
+            react: {
+              runtime: 'automatic'
+            }
+          }
+        }
       }
     ]
   },
+  transformIgnorePatterns: ['/marked\.esm\.js/'],
   modulePaths: ['<rootDir>/packages/'],
   moduleNameMapper: {
     'server/(.*)': ['<rootDir>/$1'],

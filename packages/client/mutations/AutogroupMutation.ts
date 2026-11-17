@@ -7,15 +7,13 @@ graphql`
   fragment AutogroupMutation_meeting on AutogroupSuccess {
     meeting {
       id
-      resetReflectionGroups {
-        groupTitle
-      }
       reflectionGroups {
         id
         title
         reflections {
           id
           plaintextContent
+          reflectionGroupId
         }
       }
     }
@@ -30,7 +28,7 @@ const mutation = graphql`
           message
         }
       }
-      ...AutogroupMutation_meeting @relay(mask: false)
+      ...AutogroupMutation_meeting @relay(mask: false) @alias
     }
   }
 `

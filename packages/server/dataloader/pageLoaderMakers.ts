@@ -2,12 +2,15 @@ import DataLoader from 'dataloader'
 import type {Selectable} from 'kysely'
 import TeamMemberId from '../../client/shared/gqlIds/TeamMemberId'
 import type {PageSectionEnum} from '../graphql/public/resolverTypes'
-import {selectPageAccess, selectPageUserSortOrder} from '../postgres/select'
+import {selectPageAccess, selectPageExports, selectPageUserSortOrder} from '../postgres/select'
+import type {PageExport} from '../postgres/types'
 import type {PageAccess, Pageroleenum} from '../postgres/types/pg'
 import {pageAccessByUserIdBatchFn} from './pageAccessByUserIdBatchFn'
 import type RootDataLoader from './RootDataLoader'
+import type {RegisterDependsOn} from './RootDataLoader'
 
-export const pageAccessByPageId = (parent: RootDataLoader) => {
+export const pageAccessByPageId = (parent: RootDataLoader, dependsOn: RegisterDependsOn) => {
+  dependsOn('pages')
   return new DataLoader<number, Selectable<PageAccess>[], number>(
     async (pageIds) => {
       const res = await selectPageAccess()
@@ -32,7 +35,8 @@ export const pageAccessByPageId = (parent: RootDataLoader) => {
   )
 }
 
-export const pageAccessByUserId = (parent: RootDataLoader) => {
+export const pageAccessByPageIdUserId = (parent: RootDataLoader, dependsOn: RegisterDependsOn) => {
+  dependsOn('pages')
   return new DataLoader<{pageId: number; userId: string}, Pageroleenum | null, string>(
     pageAccessByUserIdBatchFn,
     {
@@ -42,7 +46,64 @@ export const pageAccessByUserId = (parent: RootDataLoader) => {
   )
 }
 
-export const pageUserSortOrder = (parent: RootDataLoader) => {
+// The role granted to the user directly, through a team or org, or as a guest. Unlike pageAccessByPageIdUserId,
+// it ignores the public link
+export const pageGrantByPageIdUserId = (parent: RootDataLoader, dependsOn: RegisterDependsOn) => {
+  dependsOn('pages')
+  return new DataLoader<{pageId: number; userId: string}, Pageroleenum | null, string>(
+    async (keys) => {
+      const res = await selectPageAccess()
+        .where(({eb, refTuple, tuple}) =>
+          eb(
+            refTuple('pageId', 'userId'),
+            'in',
+            keys.map((key) => tuple(key.pageId, key.userId))
+          )
+        )
+        .execute()
+      return keys.map(
+        (key) =>
+          res.find(({pageId, userId}) => pageId === key.pageId && userId === key.userId)?.role ??
+          null
+      )
+    },
+    {
+      ...parent.dataLoaderOptions,
+      cacheKeyFn: (key) => `${key.pageId}:${key.userId}`
+    }
+  )
+}
+
+export const pageAccessByUserId = (parent: RootDataLoader, dependsOn: RegisterDependsOn) => {
+  dependsOn('pages')
+  return new DataLoader<string, Selectable<PageAccess>[], string>(
+    async (userIds) => {
+      const res = await selectPageAccess().where('userId', 'in', userIds).execute()
+      return userIds.map((userId) => res.filter((r) => r.userId === userId))
+    },
+    {
+      ...parent.dataLoaderOptions
+    }
+  )
+}
+
+export const pageExportsByPageId = (parent: RootDataLoader) => {
+  return new DataLoader<number, PageExport[], number>(
+    async (pageIds) => {
+      const rows = await selectPageExports()
+        .where('pageId', 'in', pageIds as number[])
+        .orderBy('createdAt', 'desc')
+        .execute()
+      return pageIds.map((pageId) => rows.filter((row) => row.pageId === pageId).slice(0, 10))
+    },
+    {
+      ...parent.dataLoaderOptions
+    }
+  )
+}
+
+export const pageUserSortOrder = (parent: RootDataLoader, dependsOn: RegisterDependsOn) => {
+  dependsOn('pages')
   return new DataLoader<{pageId: number; userId: string}, string | null, string>(
     async (keys) => {
       const res = await selectPageUserSortOrder()
@@ -66,7 +127,8 @@ export const pageUserSortOrder = (parent: RootDataLoader) => {
   )
 }
 
-export const pageUserSection = (parent: RootDataLoader) => {
+export const pageUserSection = (parent: RootDataLoader, dependsOn: RegisterDependsOn) => {
+  dependsOn('pages')
   return new DataLoader<{pageId: number; userId: string}, PageSectionEnum, string>(
     async (keys) => {
       return Promise.all(
@@ -92,7 +154,7 @@ export const pageUserSection = (parent: RootDataLoader) => {
           // if the page has a parent, it will be a subpage unless it doesn't have access to that parent
           if (parentPageId) {
             const hasParentAccess = await parent
-              .get('pageAccessByUserId')
+              .get('pageAccessByPageIdUserId')
               .load({pageId: parentPageId, userId})
             return hasParentAccess ? 'page' : 'shared'
           }

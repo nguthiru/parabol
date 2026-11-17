@@ -3,6 +3,7 @@ import Collaboration from '@tiptap/extension-collaboration'
 import {Document} from '@tiptap/extension-document'
 import Heading from '@tiptap/extension-heading'
 import Text from '@tiptap/extension-text'
+import {Placeholder} from '@tiptap/extensions'
 import {useEditor} from '@tiptap/react'
 import graphql from 'babel-plugin-relay/macro'
 import {useRef} from 'react'
@@ -43,8 +44,14 @@ export const useTipTapDatabaseEditor = (
           levels: [1]
         }),
         Database.configure({
-          document: provider?.document,
+          provider,
           userId: user?.id
+        }),
+        Placeholder.configure({
+          showOnlyWhenEditable: false,
+          showOnlyCurrent: false,
+          emptyNodeClass: 'is-empty print:hidden',
+          placeholder: 'New Database'
         })
       ],
       autofocus: true,

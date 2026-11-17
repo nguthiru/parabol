@@ -10,7 +10,8 @@ export const useConnectedMeetingMembers = (meetingId: string | null, addViewer: 
   const atmosphere = useAtmosphere()
   const {authObj, viewerId} = atmosphere
   const oldUserIdsRef = useRef<Set<string>>(new Set())
-  const providerRef = useRef<HocuspocusProvider>()
+  const pendingRemovalsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const providerRef = useRef<HocuspocusProvider>(undefined)
 
   useEffect(() => {
     if (!meetingId) return
@@ -31,9 +32,22 @@ export const useConnectedMeetingMembers = (meetingId: string | null, addViewer: 
       )
       // Update Relay
       const oldUserIds = oldUserIdsRef.current
+      const pendingRemovals = pendingRemovalsRef.current
+
+      // cancel pending removals for anyone still present, regardless of whether
+      // they're newly added (oldUserIds still contains them during the grace period)
+      nextUserIds.forEach((userId) => {
+        const timer = pendingRemovals.get(userId)
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          pendingRemovals.delete(userId)
+        }
+      })
+
       const add = [...nextUserIds].filter((userId) => !oldUserIds.has(userId))
       const remove = [...oldUserIds].filter((userId) => !nextUserIds.has(userId))
-      if (add.length || remove.length) {
+
+      if (add.length) {
         commitLocalUpdate(atmosphere, (store) => {
           add.forEach((userId) => {
             const meetingMember = store.get(MeetingMemberId.join(meetingId, userId))
@@ -42,15 +56,23 @@ export const useConnectedMeetingMembers = (meetingId: string | null, addViewer: 
               oldUserIds.add(userId)
             }
           })
-          remove.forEach((userId) => {
+        })
+      }
+
+      remove.forEach((userId) => {
+        if (pendingRemovals.has(userId)) return
+        const timer = setTimeout(() => {
+          pendingRemovals.delete(userId)
+          commitLocalUpdate(atmosphere, (store) => {
             const meetingMember = store.get(MeetingMemberId.join(meetingId, userId))
             if (meetingMember) {
               meetingMember.setValue(undefined, 'isConnectedAt')
               oldUserIds.delete(userId)
             }
           })
-        })
-      }
+        }, 1000)
+        pendingRemovals.set(userId, timer)
+      })
     }
     provider.awareness?.on('update', setConnectedUserIdsThunk)
 
@@ -59,6 +81,8 @@ export const useConnectedMeetingMembers = (meetingId: string | null, addViewer: 
 
     return () => {
       provider.awareness?.off('update', setConnectedUserIdsThunk)
+      pendingRemovalsRef.current.forEach((timer) => clearTimeout(timer))
+      pendingRemovalsRef.current.clear()
       // when going from meeting to team dash, it takes awhile before MeetingCard calls this hook
       // make sure we don't unregister until then
       providerManager.unregister(room, 5000)

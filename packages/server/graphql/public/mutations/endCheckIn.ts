@@ -1,0 +1,232 @@
+import {GraphQLError} from 'graphql'
+import {sql} from 'kysely'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {AGENDA_ITEMS, LAST_CALL} from 'parabol-client/utils/constants'
+import getMeetingPhase from 'parabol-client/utils/getMeetingPhase'
+import findStageById from 'parabol-client/utils/meetings/findStageById'
+import {positionAfter} from '../../../../client/shared/sortOrder'
+// TODO: TimelineEventCheckinComplete is from the deprecated /database directory
+import TimelineEventCheckinComplete from '../../../database/types/TimelineEventCheckinComplete'
+import type {DataLoaderInstance} from '../../../dataloader/RootDataLoader'
+import {sendSummaryEmail} from '../../../email/sendSummaryEmail'
+import generateUID from '../../../generateUID'
+import {meetingsEnded} from '../../../metricsHandler'
+import getKysely from '../../../postgres/getKysely'
+import {selectTasks} from '../../../postgres/select'
+import type {AgendaItem, Task} from '../../../postgres/types'
+import type {CheckInMeeting} from '../../../postgres/types/Meeting'
+import archiveTasksForDB from '../../../safeMutations/archiveTasksForDB'
+import removeSuggestedAction from '../../../safeMutations/removeSuggestedAction'
+import getPhase from '../../../utils/getPhase'
+import {Logger} from '../../../utils/Logger'
+import publish from '../../../utils/publish'
+import type {DataLoaderWorker} from '../../graphql'
+import isValid from '../../isValid'
+import gatherInsights from '../../mutations/helpers/gatherInsights'
+import {IntegrationNotifier} from '../../mutations/helpers/notifications/IntegrationNotifier'
+import removeEmptyTasks from '../../mutations/helpers/removeEmptyTasks'
+import {publishSummaryPage} from '../../mutations/helpers/summaryPage/publishSummaryPage'
+import type {MutationResolvers} from '../resolverTypes'
+
+type SortOrderTask = Pick<Task, 'id' | 'sortOrder'>
+const updateTaskSortOrders = async (userIds: string[], tasks: SortOrderTask[]) => {
+  const pg = getKysely()
+  const taskMaxRes = await pg
+    .selectFrom('Task')
+    .select(({fn}) => fn.max<bigint>('sortOrder').as('maxSortOrder'))
+    .where('userId', 'in', userIds)
+    .where(sql<boolean>`'archived' != ALL(tags)`)
+    .executeTakeFirst()
+  const maxSortOrder = Number(taskMaxRes?.maxSortOrder ?? 0)
+  tasks.forEach((task, idx) => {
+    task.sortOrder = maxSortOrder + idx + 1
+  })
+  await Promise.all(
+    tasks.map((task) =>
+      pg.updateTable('Task').set({sortOrder: task.sortOrder}).where('id', '=', task.id).execute()
+    )
+  )
+  return tasks
+}
+
+const clearAgendaItems = async (teamId: string, dataLoader: DataLoaderInstance) => {
+  await getKysely()
+    .updateTable('AgendaItem')
+    .set({isActive: false})
+    .where('teamId', '=', teamId)
+    .execute()
+  dataLoader.clearAll('agendaItems')
+}
+
+const getPinnedAgendaItems = async (teamId: string, dataLoader: DataLoaderInstance) => {
+  const agendaItems = await dataLoader.get('agendaItemsByTeamId').load(teamId)
+  return agendaItems.filter((agendaItem) => agendaItem.pinned)
+}
+
+const clonePinnedAgendaItems = async (
+  pinnedAgendaItems: AgendaItem[],
+  dataLoader: DataLoaderInstance
+) => {
+  if (!pinnedAgendaItems.length) return
+  let curSortOrder = ''
+  const clonedPins = pinnedAgendaItems.map((agendaItem) => {
+    const agendaItemId = `${agendaItem.teamId}::${generateUID()}`
+    const sortOrder = positionAfter(curSortOrder)
+    curSortOrder = sortOrder
+    return {
+      id: agendaItemId,
+      content: agendaItem.content,
+      pinned: agendaItem.pinned,
+      pinnedParentId: agendaItem.pinnedParentId ? agendaItem.pinnedParentId : agendaItemId,
+      sortOrder,
+      teamId: agendaItem.teamId,
+      teamMemberId: agendaItem.teamMemberId
+    }
+  })
+  await getKysely().insertInto('AgendaItem').values(clonedPins).execute()
+  dataLoader.clearAll('agendaItems')
+}
+
+const loadCheckInSummary = async (meeting: CheckInMeeting, dataLoader: DataLoaderWorker) => {
+  const {id: meetingId, teamId, phases} = meeting
+  const agendaItemPhase = getPhase(phases, 'agendaitems')
+  const {stages} = agendaItemPhase
+  const discussionIds = stages.map((stage) => stage.discussionId)
+  const [meetingMembers, tasks, doneTasks, activeAgendaItems, commentCounts] = await Promise.all([
+    dataLoader.get('meetingMembersByMeetingId').load(meetingId),
+    dataLoader.get('tasksByMeetingId').load(meetingId),
+    selectTasks()
+      .where('teamId', '=', teamId)
+      .where('status', '=', 'done')
+      .where(sql<boolean>`'archived' != ALL(tags)`)
+      .execute(),
+    dataLoader.get('agendaItemsByTeamId').load(teamId),
+    dataLoader.get('commentCountByDiscussionId').loadMany(discussionIds)
+  ])
+  const commentCount = commentCounts.filter(isValid).reduce((cumSum, count) => cumSum + count, 0)
+  return {meetingMembers, tasks, doneTasks, activeAgendaItems, commentCount}
+}
+
+const resetTeamAfterCheckIn = async (
+  meeting: CheckInMeeting,
+  summary: Awaited<ReturnType<typeof loadCheckInSummary>>,
+  isKill: boolean,
+  dataLoader: DataLoaderWorker
+) => {
+  const {id: meetingId, teamId} = meeting
+  const {meetingMembers, tasks, doneTasks} = summary
+  const userIds = meetingMembers.map(({userId}) => userId)
+  const pinnedAgendaItems = await getPinnedAgendaItems(teamId, dataLoader)
+  await Promise.all([
+    isKill ? undefined : archiveTasksForDB(doneTasks, meetingId),
+    isKill
+      ? undefined
+      : clearAgendaItems(teamId, dataLoader).then(() =>
+          clonePinnedAgendaItems(pinnedAgendaItems, dataLoader)
+        ),
+    updateTaskSortOrders(userIds, tasks)
+  ])
+}
+
+const endCheckIn: MutationResolvers['endCheckIn'] = async (_source, {meetingId}, context, info) => {
+  const {socketId: mutatorId, dataLoader} = context
+  const pg = getKysely()
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+  const now = new Date()
+
+  // AUTH
+  const meeting = await dataLoader.get('newMeetings').load(meetingId)
+  if (!meeting) throw new GraphQLError('Meeting not found', {extensions: {code: 'NOT_FOUND'}})
+  if (meeting.meetingType !== 'action') {
+    throw new GraphQLError('Not a check-in meeting', {extensions: {code: 'BAD_USER_INPUT'}})
+  }
+  const {endedAt, facilitatorStageId, phases, teamId} = meeting
+
+  // VALIDATION
+  if (endedAt) throw new GraphQLError('Meeting already ended', {extensions: {code: 'CONFLICT'}})
+
+  // RESOLUTION
+  const currentStageRes = findStageById(phases, facilitatorStageId)
+  if (currentStageRes) {
+    const {stage} = currentStageRes
+    stage.isComplete = true
+    stage.endAt = now
+  }
+  const phase = getMeetingPhase(phases)
+  const [insights, team, teamMembers, removedTaskIds] = await Promise.all([
+    gatherInsights(meeting, dataLoader),
+    dataLoader.get('teams').loadNonNull(teamId),
+    dataLoader.get('teamMembersByTeamId').load(teamId),
+    removeEmptyTasks(meetingId)
+  ])
+  const summary = await loadCheckInSummary(meeting, dataLoader)
+  const {tasks, doneTasks, activeAgendaItems, commentCount} = summary
+
+  await pg
+    .updateTable('NewMeeting')
+    .set({
+      endedAt: now,
+      phases: JSON.stringify(phases),
+      usedReactjis: JSON.stringify(insights.usedReactjis),
+      engagement: insights.engagement,
+      agendaItemCount: activeAgendaItems.length,
+      commentCount,
+      taskCount: tasks.length
+    })
+    .where('id', '=', meetingId)
+    .execute()
+  dataLoader.clearAll('newMeetings')
+
+  const isKill = !!(phase && ![AGENDA_ITEMS, LAST_CALL].includes(phase.phaseType))
+  const teamReset = resetTeamAfterCheckIn(meeting, summary, isKill, dataLoader)
+  const updatedTaskIds = [...tasks, ...doneTasks].map(({id}) => id)
+
+  const events = teamMembers.map(
+    (teamMember) =>
+      new TimelineEventCheckinComplete({
+        userId: teamMember.userId,
+        teamId,
+        orgId: team.orgId,
+        meetingId
+      })
+  )
+  const removeTryCheckInSuggestedAction = async () => {
+    if (!team.isOnboardTeam) return
+    const teamLeader = teamMembers.find(({isLead}) => isLead)!
+    const {userId: teamLeadUserId} = teamLeader
+
+    const removedSuggestedActionId = await removeSuggestedAction(teamLeadUserId, 'tryActionMeeting')
+    if (removedSuggestedActionId) {
+      publish(
+        SubscriptionChannel.NOTIFICATION,
+        teamLeadUserId,
+        'EndCheckInSuccess',
+        {removedSuggestedActionId},
+        subOptions
+      )
+    }
+  }
+
+  const [page] = await Promise.all([
+    publishSummaryPage(meetingId, context, info, teamReset),
+    teamReset,
+    pg.insertInto('TimelineEvent').values(events).execute(),
+    removeTryCheckInSuggestedAction()
+  ])
+  meeting.summaryPageId = page.id
+  const data = {
+    meetingId,
+    teamId,
+    isKill,
+    updatedTaskIds,
+    removedTaskIds
+  }
+  publish(SubscriptionChannel.TEAM, teamId, 'EndCheckInSuccess', data, subOptions)
+  sendSummaryEmail(meetingId, page.id, context, info).catch(Logger.log)
+  IntegrationNotifier.endMeeting(dataLoader, meetingId, teamId).catch(Logger.log)
+  meetingsEnded.inc({meeting_type: meeting.meetingType})
+  return data
+}
+
+export default endCheckIn

@@ -1,5 +1,6 @@
+import {GraphQLError} from 'graphql'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
-import {BATCH_ORG_USER_REMOVAL_LIMIT} from '../../../postgres/constants'
+import {BATCH_ORG_USER_REMOVAL_LIMIT} from '../../../../client/utils/constants'
 import {
   getUserId,
   isSuperUser,
@@ -7,28 +8,28 @@ import {
   isUserOrgAdmin
 } from '../../../utils/authorization'
 import publish from '../../../utils/publish'
-import standardError from '../../../utils/standardError'
 import removeFromOrg from '../../mutations/helpers/removeFromOrg'
 import type {MutationResolvers} from '../resolverTypes'
 
 const removeOrgUsers: MutationResolvers['removeOrgUsers'] = async (
   _source,
   {userIds, orgId},
-  {authToken, dataLoader, socketId: mutatorId}
+  context
 ) => {
+  const {authToken, dataLoader, socketId: mutatorId} = context
   const operationId = dataLoader.share()
   const subOptions = {operationId, mutatorId}
 
   const viewerId = getUserId(authToken)
   if (userIds.length === 0) {
-    return standardError(new Error('Empty userIds array is provided'), {
-      userId: viewerId
+    throw new GraphQLError('Empty userIds array is provided', {
+      extensions: {code: 'BAD_USER_INPUT'}
     })
   }
   if (userIds.length > BATCH_ORG_USER_REMOVAL_LIMIT) {
-    return standardError(
-      new Error(`Cannot remove more than ${BATCH_ORG_USER_REMOVAL_LIMIT} org users at once`),
-      {userId: getUserId(authToken)}
+    throw new GraphQLError(
+      `Cannot remove more than ${BATCH_ORG_USER_REMOVAL_LIMIT} org users at once`,
+      {extensions: {code: 'BAD_USER_INPUT'}}
     )
   }
 
@@ -40,69 +41,65 @@ const removeOrgUsers: MutationResolvers['removeOrgUsers'] = async (
       !(await isUserOrgAdmin(viewerId, orgId, dataLoader)) &&
       !isSuperUser(authToken)
     ) {
-      return standardError(new Error('Must be the organization leader to remove other users'), {
-        userId: viewerId
+      throw new GraphQLError('Must be the organization leader to remove other users', {
+        extensions: {code: 'FORBIDDEN'}
       })
     }
   }
 
-  const organization = await dataLoader.get('organizations').load(orgId)
-  if (!organization) {
-    return standardError(new Error('Organization not found'), {
-      userId: viewerId
+  if (context.resourceGrants && !(await context.resourceGrants.hasOrg(orgId))) {
+    throw new GraphQLError('PAT does not grant access to this organization', {
+      extensions: {code: 'FORBIDDEN'}
     })
   }
 
-  const orgUsers = await dataLoader
-    .get('organizationUsersByUserIdOrgId')
-    .loadMany(userIds.map((userId) => ({userId, orgId})))
-  const nonOrgUsers = userIds.filter((_, idx) => !orgUsers[idx])
+  const organization = await dataLoader.get('organizations').load(orgId)
+  if (!organization) {
+    throw new GraphQLError('Organization not found', {extensions: {code: 'NOT_FOUND'}})
+  }
+
+  const allOrgUsers = await dataLoader.get('organizationUsersByOrgId').load(orgId)
+  const nonOrgUsers = userIds.filter(
+    (userId) => !allOrgUsers.some((orgUser) => orgUser.userId === userId)
+  )
   if (nonOrgUsers.length > 0) {
-    return standardError(
-      new Error(`User(s) ${nonOrgUsers.join(', ')} are not members of the organization ${orgId}`),
-      {userId: viewerId}
+    throw new GraphQLError(
+      `User(s) ${nonOrgUsers.join(', ')} are not members of the organization ${orgId}`,
+      {extensions: {code: 'BAD_USER_INPUT'}}
     )
   }
 
-  const removedUserResults = await Promise.all(
-    userIds.map(async (removedUserId: string) => {
-      const removedUserData = await removeFromOrg(removedUserId, orgId, viewerId, dataLoader)
-      return {removedUserId, removedUserData}
+  const remainingOrgUsers = allOrgUsers.filter((orgUser) => !userIds.includes(orgUser.userId))
+  if (remainingOrgUsers.length === 0) {
+    throw new GraphQLError('Cannot remove all members from an org', {
+      extensions: {code: 'CONFLICT'}
     })
-  )
-
-  const data = {
-    removedUserIds: [...new Set(removedUserResults.map(({removedUserId}) => removedUserId))],
-    removedOrgMemberIds: [
-      ...new Set(removedUserResults.map(({removedUserData}) => removedUserData.organizationUserId))
-    ],
-    removedTeamMemberIds: [
-      ...new Set(removedUserResults.flatMap(({removedUserData}) => removedUserData.teamMemberIds))
-    ],
-    affectedOrganizationId: orgId,
-    affectedOrganizationName: organization.name,
-    affectedTeamIds: [
-      ...new Set(removedUserResults.flatMap(({removedUserData}) => removedUserData.teamIds))
-    ],
-    affectedTaskIds: [
-      ...new Set(removedUserResults.flatMap(({removedUserData}) => removedUserData.taskIds))
-    ],
-    affectedMeetingIds: [
-      ...new Set(
-        removedUserResults.flatMap(({removedUserData}) => removedUserData.activeMeetingIds)
-      )
-    ],
-    kickOutNotificationIds: [
-      ...new Set(
-        removedUserResults.flatMap(({removedUserData}) => removedUserData.kickOutNotificationIds)
-      )
-    ]
+  }
+  if (
+    !remainingOrgUsers.some(
+      (orgUser) => orgUser.role && ['BILLING_LEADER', 'ORG_ADMIN'].includes(orgUser.role)
+    )
+  ) {
+    throw new GraphQLError('Cannot remove last billing leader', {extensions: {code: 'CONFLICT'}})
   }
 
-  removedUserResults.map(async ({removedUserId, removedUserData}) => {
-    publish(SubscriptionChannel.NOTIFICATION, removedUserId, 'AuthTokenPayload', {
-      tms: removedUserData.tms
-    })
+  const {removedUsers, teamMemberIds, teamIds, taskIds, activeMeetingIds, kickOutNotificationIds} =
+    await removeFromOrg([...new Set(userIds)], orgId, viewerId, dataLoader)
+
+  const data = {
+    removedUserIds: removedUsers.map(({userId}) => userId),
+    removedOrgMemberIds: removedUsers.map(({organizationUserId}) => organizationUserId),
+    removedTeamMemberIds: teamMemberIds,
+    affectedOrganizationId: orgId,
+    affectedOrganizationName: organization.name,
+    affectedTeamIds: teamIds,
+    affectedTaskIds: [...new Set(taskIds)],
+    affectedMeetingIds: [...new Set(activeMeetingIds)],
+    kickOutNotificationIds
+  }
+
+  removedUsers.forEach(({userId, tms}) => {
+    publish(SubscriptionChannel.NOTIFICATION, userId, 'AuthTokenPayload', {tms})
   })
 
   publish(SubscriptionChannel.ORGANIZATION, orgId, 'RemoveOrgUsersSuccess', data, subOptions)
@@ -111,14 +108,8 @@ const removeOrgUsers: MutationResolvers['removeOrgUsers'] = async (
     publish(SubscriptionChannel.TEAM, teamId, 'RemoveOrgUsersSuccess', data, subOptions)
   })
 
-  removedUserResults.map(async ({removedUserId}) => {
-    publish(
-      SubscriptionChannel.NOTIFICATION,
-      removedUserId,
-      'RemoveOrgUsersSuccess',
-      data,
-      subOptions
-    )
+  removedUsers.forEach(({userId}) => {
+    publish(SubscriptionChannel.NOTIFICATION, userId, 'RemoveOrgUsersSuccess', data, subOptions)
   })
 
   data.removedTeamMemberIds.map(async (removedTeamMemberId) => {

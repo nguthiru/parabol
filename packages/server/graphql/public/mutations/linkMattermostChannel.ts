@@ -1,9 +1,8 @@
+import {GraphQLError} from 'graphql'
 import {sql} from 'kysely'
 import {isNotNull} from '../../../../client/utils/predicates'
 import getKysely from '../../../postgres/getKysely'
-import {getUserId, isTeamMember} from '../../../utils/authorization'
 import logError from '../../../utils/logError'
-import standardError from '../../../utils/standardError'
 import type {MutationResolvers} from '../resolverTypes'
 
 const linkMattermostChannel: MutationResolvers['linkMattermostChannel'] = async (
@@ -11,23 +10,15 @@ const linkMattermostChannel: MutationResolvers['linkMattermostChannel'] = async 
   {teamId, channelId},
   context
 ) => {
-  const {authToken, dataLoader} = context
-  const viewerId = getUserId(authToken)
+  const {dataLoader} = context
   const pg = getKysely()
-
-  //AUTH
-  if (!isTeamMember(authToken, teamId)) {
-    return standardError(new Error('Attempted teamId spoof'), {
-      userId: viewerId
-    })
-  }
 
   // VALIDATION
   const [mattermostProvider] = await dataLoader
     .get('sharedIntegrationProviders')
     .load({service: 'mattermost', orgIds: [], teamIds: []})
   if (!mattermostProvider || mattermostProvider.authStrategy !== 'sharedSecret') {
-    return {error: {message: 'Mattermost integration not found'}}
+    throw new GraphQLError('Mattermost integration not found', {extensions: {code: 'NOT_FOUND'}})
   }
   const {id: providerId} = mattermostProvider
 
@@ -55,7 +46,7 @@ const linkMattermostChannel: MutationResolvers['linkMattermostChannel'] = async 
     logError(new Error('Linking Mattermost Channel failed'), {
       tags: {teamId, channelId}
     })
-    return {error: {message: 'Linking failed'}}
+    throw new GraphQLError('Linking failed', {extensions: {code: 'SERVICE_UNAVAILABLE'}})
   }
 
   const settings = await dataLoader

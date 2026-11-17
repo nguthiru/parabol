@@ -1,12 +1,22 @@
+import {GraphQLError} from 'graphql'
+import getKysely from '../../../postgres/getKysely'
+import {selectPinnedReports} from '../../../reports/pinnedReports'
+import readReportSpecInput from '../../../reports/readReportSpecInput'
+import {readReportTeamHealthStage} from '../../../reports/reportTeamHealth'
+import runReport from '../../../reports/runReport'
 import {
   getUserId,
   isSuperUser,
   isUserBillingLeader,
   isUserOrgAdmin
 } from '../../../utils/authorization'
+import {CipherId} from '../../../utils/CipherId'
+import type {FeatureFlagName} from '../../../utils/featureFlags'
+import {getStripeManager} from '../../../utils/stripe'
 import {getFeatureTier} from '../../types/helpers/getFeatureTier'
 import type {OrganizationResolvers} from '../resolverTypes'
-import getActiveTeamCountByOrgIds from './helpers/getActiveTeamCountByOrgIds'
+
+const MAX_ACTIVE_USER_COUNT_TIMES = 366
 
 const Organization: OrganizationResolvers = {
   approvedDomains: async ({id: orgId}, _args, {dataLoader}) => {
@@ -23,19 +33,20 @@ const Organization: OrganizationResolvers = {
     return {id: activeDomain}
   },
   featureFlag: async ({id: orgId}, {featureName}, {dataLoader}) => {
-    return await dataLoader.get('featureFlagByOwnerId').load({ownerId: orgId, featureName})
-  },
-  picture: async ({picture}, _args, {dataLoader}) => {
-    if (!picture) return null
-    return dataLoader.get('fileStoreAsset').load(picture)
+    return await dataLoader
+      .get('featureFlagByOwnerId')
+      .load({ownerId: orgId, featureName: featureName as FeatureFlagName})
   },
   tier: ({tier, trialStartDate}) => {
     return getFeatureTier({tier, trialStartDate})
   },
   billingTier: ({tier}) => tier,
   saml: async ({id: orgId}, _args, {dataLoader}) => {
-    const saml = await dataLoader.get('samlByOrgId').load(orgId)
-    return saml || null
+    const samls = await dataLoader.get('samlsByOrgId').load(orgId)
+    return samls[0] ?? null
+  },
+  samls: ({id: orgId}, _args, {dataLoader}) => {
+    return dataLoader.get('samlsByOrgId').load(orgId)
   },
 
   isBillingLeader: async ({id: orgId}, _args, {authToken, dataLoader}) => {
@@ -48,20 +59,63 @@ const Organization: OrganizationResolvers = {
     return isUserOrgAdmin(viewerId, orgId, dataLoader)
   },
 
-  activeTeamCount: async ({id: orgId}) => {
-    return getActiveTeamCountByOrgIds(orgId)
+  activeTeamCount: async ({id: orgId}, _args, {dataLoader}) => {
+    const activeTeams = await dataLoader.get('activeTeamsByOrgId').load(orgId)
+    return activeTeams.length
+  },
+
+  activeUserCounts: async ({id: orgId}, {at}, {dataLoader}) => {
+    if (at.length > MAX_ACTIVE_USER_COUNT_TIMES) {
+      throw new GraphQLError(
+        `Cannot count active users at more than ${MAX_ACTIVE_USER_COUNT_TIMES} times at once`,
+        {extensions: {code: 'BAD_USER_INPUT'}}
+      )
+    }
+    return dataLoader.get('activeUserCountsByOrgId').load({orgId, times: at})
+  },
+
+  report: async ({id: orgId}, {spec, timeZone}, {authToken, dataLoader}) => {
+    return runReport({
+      orgId,
+      spec: readReportSpecInput(spec),
+      timeZone,
+      pagePeriod: null,
+      viewerId: getUserId(authToken),
+      isSuperUser: isSuperUser(authToken),
+      dataLoader
+    })
+  },
+
+  reportTeamHealthStage: async (_source, {meetingId, categoryId}, {dataLoader}) => {
+    return readReportTeamHealthStage(meetingId, categoryId, dataLoader)
+  },
+
+  pinnedReports: ({id: orgId}) => selectPinnedReports(orgId),
+  structure: async ({id: orgId}, _args, {dataLoader}) => {
+    const {levels} = await dataLoader.get('orgStructureByOrgId').load(orgId)
+    return levels
+  },
+
+  recentReportQuestions: async ({id: orgId}, _args, {authToken}) => {
+    return getKysely()
+      .selectFrom('ReportQuestion')
+      .selectAll()
+      .where('userId', '=', getUserId(authToken))
+      .where('orgId', '=', orgId)
+      .orderBy('lastUsedAt', 'desc')
+      .execute()
   },
 
   teams: async ({id: orgId}, _args, {dataLoader, authToken}) => {
     const viewerId = getUserId(authToken)
-    const [teamsInOrg, isOrgAdmin] = await Promise.all([
+    const [teamsInOrg, isBillingLeader] = await Promise.all([
       dataLoader.get('teamsByOrgIds').load(orgId),
-      isUserOrgAdmin(viewerId, orgId, dataLoader)
+      isUserBillingLeader(viewerId, orgId, dataLoader)
     ])
     const sortedTeams = teamsInOrg.sort((a, b) => a.name.localeCompare(b.name))
 
-    if (isOrgAdmin || isSuperUser(authToken)) {
-      // Org admins and super users can see all teams
+    if (isBillingLeader || isSuperUser(authToken)) {
+      // Billing leaders, org admins, and super users can see all teams
       return sortedTeams
     } else {
       // Regular users can see teams they're on plus public teams
@@ -118,7 +172,34 @@ const Organization: OrganizationResolvers = {
   },
   integrationProviders: ({id: orgId}) => ({orgId}),
   orgFeatureFlags: async ({id: orgId}, _args, {dataLoader}) => {
-    return dataLoader.get('allFeatureFlagsByOwner').load({ownerId: orgId, scope: 'Organization'})
+    const orgFeatureFlags = await dataLoader
+      .get('allFeatureFlagsByOwner')
+      .load({ownerId: orgId, scope: 'Organization'})
+    return orgFeatureFlags.filter((flag) => flag.isPublic)
+  },
+  oauthApplications: async ({id: orgId}, _args, {dataLoader}) => {
+    return dataLoader.get('oauthProvidersByOrgId').load(orgId)
+  },
+  oauthAPIProvider: async ({id: orgId}, {providerId}, {dataLoader}) => {
+    const [dbProviderId] = CipherId.fromClient(providerId)
+    const provider = await dataLoader.get('oAuthProviders').load(dbProviderId)
+
+    if (!provider || provider.orgId !== orgId) {
+      return null
+    }
+
+    return provider
+  },
+
+  coupon: async ({couponId}) => {
+    if (!couponId) return null
+    const manager = getStripeManager()
+    const coupon = await manager.retrieveCoupon(couponId)
+    if (coupon instanceof Error) return null
+    return {
+      percentOff: coupon.percent_off ?? 0,
+      durationInMonths: coupon.duration_in_months ?? null
+    }
   }
 }
 

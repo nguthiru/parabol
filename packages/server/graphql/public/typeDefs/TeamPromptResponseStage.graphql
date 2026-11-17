@@ -1,10 +1,8 @@
 """
-The stage where the single team member responds to a prompt
+The stage where a single team member writes their response to a team prompt
 """
 type TeamPromptResponseStage implements NewMeetingStage & DiscussionThreadStage & NewMeetingTeamMemberStage {
-  """
-  stageId, shortid
-  """
+  "Unique identifier"
   id: ID!
 
   """
@@ -12,15 +10,13 @@ type TeamPromptResponseStage implements NewMeetingStage & DiscussionThreadStage 
   """
   endAt: DateTime
 
-  """
-  foreign key. try using meeting
-  """
+  "The ID of the meeting this stage belongs to"
   meetingId: ID!
 
   """
   The meeting this stage belongs to
   """
-  meeting: NewMeeting
+  meeting: NewMeeting!
 
   """
   true if the facilitator has completed this stage, else false. Should be boolean(endAt)
@@ -94,6 +90,11 @@ type TeamPromptResponseStage implements NewMeetingStage & DiscussionThreadStage 
   timeRemaining: Float
 
   """
+  The 0-based position of this stage within its phase, ordered by sortOrder.
+  """
+  stageIdx: Int!
+
+  """
   The ID to find the discussion that goes in the stage
   """
   discussionId: ID!
@@ -104,8 +105,11 @@ type TeamPromptResponseStage implements NewMeetingStage & DiscussionThreadStage 
   discussion: Discussion!
 
   """
-  foreign key. use teamMember
+  Orders the stages of the phase, compared by character code. A member who joins after the meeting starts gets one after every other stage
   """
+  sortOrder: String!
+
+  "The ID of the team member whose response this stage captures"
   teamMemberId: ID!
 
   """
@@ -117,6 +121,13 @@ type TeamPromptResponseStage implements NewMeetingStage & DiscussionThreadStage 
   The response to the prompt
   """
   response: TeamPromptResponse
+    @deprecated(reason: "A member has one response per prompt. Use responses")
+
+  """
+  The member's responses in this stand-up, one per prompt. Another member's responses are only
+  returned once shared
+  """
+  responses: [TeamPromptResponse!]!
 
   """
   The meeting member that is the focus for this phase item

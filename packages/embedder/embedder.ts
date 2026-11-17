@@ -1,25 +1,21 @@
-import tracer from 'dd-trace'
-import 'parabol-server/initLogging'
-import {Logger} from 'parabol-server/utils/Logger'
+import {Logger, setLogService} from 'parabol-server/utils/Logger'
+import logProcessWarnings from 'parabol-server/utils/logProcessWarnings'
 import RedisInstance from 'parabol-server/utils/RedisInstance'
+import registerFatalErrorHandlers from 'parabol-server/utils/registerFatalErrorHandlers'
 import type {Tuple} from '../client/types/generics'
 import {establishPrimaryServer} from '../server/establishPrimaryServer'
 import getModelManager from './ai_models/ModelManager'
 import {EmbeddingsJobQueueStream} from './EmbeddingsJobQueueStream'
+import {primeSupportedLanguages} from './getSupportedLanguages'
 import {importHistoricalMetadata} from './importHistoricalMetadata'
 import {logPerformance} from './logPerformance'
 import {mergeAsyncIterators} from './mergeAsyncIterators'
 import {resetStalledJobs} from './resetStalledJobs'
 import {WorkflowOrchestrator} from './WorkflowOrchestrator'
 
-tracer.init({
-  service: `embedder`,
-  appsec: process.env.DD_APPSEC_ENABLED === 'true',
-  plugins: false,
-  version: __APP_VERSION__
-})
-// The embedder queue is in PG & gets hits non-stop, which dirties up the logs. Ignore the polling query before enabling pg
-// tracer.use('pg')
+setLogService('embedder')
+registerFatalErrorHandlers()
+logProcessWarnings()
 
 const run = async () => {
   const SERVER_ID = process.env.SERVER_ID
@@ -31,7 +27,10 @@ const run = async () => {
   }
 
   const redis = new RedisInstance(`embedder_${SERVER_ID}`)
-  const primaryLock = await establishPrimaryServer(redis, 'embedder')
+  const [primaryLock] = await Promise.all([
+    establishPrimaryServer(redis, 'embedder'),
+    primeSupportedLanguages()
+  ])
   const modelManager = getModelManager()
   if (primaryLock) {
     // only 1 worker needs to perform these on startup
@@ -39,12 +38,14 @@ const run = async () => {
     await importHistoricalMetadata()
     resetStalledJobs()
   }
+  // TEI has a long warmup time. Better to wait now than to fail later
+  await modelManager.getEmbedder().ready()
 
   const orchestrator = new WorkflowOrchestrator()
   // Assume 3 workers for type safety, but it doesn't really matter at runtime
   const jobQueueStreams = Array.from(
     {length: NUM_WORKERS},
-    () => new EmbeddingsJobQueueStream(orchestrator)
+    (_, idx) => new EmbeddingsJobQueueStream(orchestrator, {liveOnly: NUM_WORKERS > 1 && idx === 0})
   ) as Tuple<EmbeddingsJobQueueStream, 3>
   const streams = mergeAsyncIterators(jobQueueStreams)
 

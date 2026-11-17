@@ -1,13 +1,16 @@
 import {lazy, memo, Suspense} from 'react'
 import 'react-day-picker/dist/style.css'
-import {Route, Switch} from 'react-router'
-import useAtmosphere from '../../hooks/useAtmosphere'
+import {Route, Routes} from 'react-router'
+import useNavigationBreadcrumbs from '../../hooks/useNavigationBreadcrumbs'
+import useNavigationTimings from '../../hooks/useNavigationTimings'
+import useQuietUpdate from '../../hooks/useQuietUpdate'
 import useServiceWorkerUpdater from '../../hooks/useServiceWorkerUpdater'
 import {LoaderSize} from '../../types/constEnums'
 import {cn} from '../../ui/cn'
 import {CREATE_ACCOUNT_SLUG, SIGNIN_SLUG} from '../../utils/constants'
 import ErrorBoundary from '../ErrorBoundary'
 import Banner from '../GlobalBanner'
+import {useIsAuthenticated} from '../IsAuthenticatedProvider'
 import LoadingComponent from '../LoadingComponent/LoadingComponent'
 import PrivateRoutes from '../PrivateRoutes'
 import Snackbar from '../Snackbar'
@@ -17,6 +20,9 @@ const AuthenticationPage = lazy(
   () => import(/* webpackChunkName: 'AuthenticationPage' */ '../AuthenticationPage')
 )
 const DemoMeeting = lazy(() => import(/* webpackChunkName: 'DemoMeeting' */ '../DemoMeeting'))
+const TeamHealthDemoPage = lazy(
+  () => import(/* webpackChunkName: 'TeamHealthDemoPage' */ '../TeamHealthDemo/TeamHealthDemoPage')
+)
 const DemoSummary = lazy(() => import(/* webpackChunkName: 'DemoSummary' */ '../DemoSummary'))
 const AuthProvider = lazy(() => import(/* webpackChunkName: 'AuthProvider' */ '../AuthProvider'))
 const SAMLRedirect = lazy(() => import(/* webpackChunkName: 'SAMLRedirect' */ '../SAMLRedirect'))
@@ -33,9 +39,17 @@ const InvitationLink = lazy(
 const PageRoot = lazy(
   () => import(/* webpackChunkName: 'PageRoot' */ '../../modules/pages/PageRoot')
 )
+const OAuthAuthorizePage = lazy(
+  () => import(/* webpackChunkName: 'OAuthAuthorizePage' */ '../OAuthAuthorizePage')
+)
+// The editor stack is a third of the entry bundle & the sign in pages do not use it
+const TipTapLayout = lazy(() => import(/* webpackChunkName: 'TipTapLayout' */ '../TipTapLayout'))
 
 const Action = memo(() => {
   useServiceWorkerUpdater()
+  useQuietUpdate()
+  useNavigationBreadcrumbs()
+  useNavigationTimings()
   const isInternalAuthEnabled = window.__ACTION__.AUTH_INTERNAL_ENABLED
   // Global Banner
   const isGlobalBannerEnabled = window.__ACTION__.GLOBAL_BANNER_ENABLED
@@ -44,15 +58,17 @@ const Action = memo(() => {
   const bannerColor = window.__ACTION__.GLOBAL_BANNER_COLOR
   // /pages must have the same stable path as the other dashboard routes
   // to preserve the internal state of the left nav (i.e. which team & pages are expanded)
-  const {authObj} = useAtmosphere()
-  const isAuthenticated = !!authObj
+  const isAuthenticated = useIsAuthenticated()
 
   return (
     <>
       <ErrorBoundary>
         <Snackbar />
         <Suspense fallback={<LoadingComponent spinnerSize={LoaderSize.WHOLE_PAGE} />}>
-          <AnalyticsPage />
+          {/* Nested so analytics never holds up the first route, but still mounts no earlier than it */}
+          <Suspense fallback={null}>
+            <AnalyticsPage />
+          </Suspense>
           {isGlobalBannerEnabled && (
             <Banner bgColor={bannerBgColor} color={bannerColor} text={bannerText} />
           )}
@@ -62,53 +78,48 @@ const Action = memo(() => {
               isGlobalBannerEnabled && `h-[calc(100vh-var(--global-banner-height))]`
             )}
           >
-            <Switch>
-              <Route exact path='/' render={(p) => <AuthenticationPage {...p} page={'signin'} />} />
+            <Routes>
+              <Route path='/' element={<AuthenticationPage page={'signin'} />} />
+              <Route path={`/${SIGNIN_SLUG}`} element={<AuthenticationPage page={'signin'} />} />
               <Route
-                exact
-                path={`/${SIGNIN_SLUG}`}
-                render={(p) => <AuthenticationPage {...p} page={'signin'} />}
-              />
-              <Route
-                exact
                 path={`/${CREATE_ACCOUNT_SLUG}`}
-                render={(p) => <AuthenticationPage {...p} page={'create-account'} />}
+                element={<AuthenticationPage page={'create-account'} />}
               />
-              <Route exact path={`/auth/:provider`} component={AuthProvider} />
-              <Route path={`/saml-redirect`} component={SAMLRedirect} />
-              <Route
-                path='/retrospective-demo/:localPhaseSlug?/:stageIdxSlug?'
-                component={DemoMeeting}
-              />
-              <Route path='/retrospective-demo-summary/:urlAction?' component={DemoSummary} />
+              <Route path='/auth/:provider' element={<AuthProvider />} />
+              <Route path='/saml-redirect' element={<SAMLRedirect />} />
+              <Route path='/team-health-demo/*' element={<TeamHealthDemoPage />} />
               {isInternalAuthEnabled && (
                 <Route
-                  exact
-                  path={`/forgot-password`}
-                  render={(p) => <AuthenticationPage {...p} page={'forgot-password'} />}
+                  path='/forgot-password'
+                  element={<AuthenticationPage page={'forgot-password'} />}
                 />
               )}
               {isInternalAuthEnabled && (
                 <Route
-                  path={`/forgot-password/submitted`}
-                  render={(p) => <AuthenticationPage {...p} page={`forgot-password/submitted`} />}
+                  path='/forgot-password/submitted'
+                  element={<AuthenticationPage page={'forgot-password/submitted'} />}
                 />
               )}
               <Route
-                path='/verify-email/:verificationToken/:invitationToken?'
-                component={VerifyEmail}
+                path='/verify-email/:verificationToken/:invitationToken'
+                element={<VerifyEmail />}
               />
-              <Route path='/reset-password/:token' component={SetNewPassword} />
-              <Route path='/team-invitation/:token' component={TeamInvitation} />
-              <Route path='/invitation-link/:token' component={InvitationLink} />
+              <Route path='/verify-email/:verificationToken' element={<VerifyEmail />} />
+              <Route path='/reset-password/:token' element={<SetNewPassword />} />
+              <Route path='/oauth/authorize' element={<OAuthAuthorizePage />} />
+              <Route path='/team-invitation/:token' element={<TeamInvitation />} />
+              <Route path='/invitation-link/:token' element={<InvitationLink />} />
               {!isAuthenticated && (
-                <Route
-                  path='/pages/:pageSlug'
-                  render={(routeProps) => <PageRoot {...routeProps} viewerRef={null} isPublic />}
-                />
+                <Route path='/pages/:pageSlug' element={<PageRoot viewerRef={null} isPublic />} />
               )}
-              <Route component={PrivateRoutes} />
-            </Switch>
+              {/* Any route that renders a useTipTapContext consumer must be a child of TipTapLayout */}
+              <Route element={<TipTapLayout />}>
+                <Route path='/retrospective-demo/*' element={<DemoMeeting />} />
+                <Route path='/retrospective-demo-summary/:urlAction' element={<DemoSummary />} />
+                <Route path='/retrospective-demo-summary' element={<DemoSummary />} />
+                <Route path='/*' element={<PrivateRoutes />} />
+              </Route>
+            </Routes>
           </div>
         </Suspense>
       </ErrorBoundary>

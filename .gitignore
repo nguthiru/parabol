@@ -10,16 +10,15 @@
 .history/
 .idea/
 .roomodes
-.nx/
 .yarn/
-pgBackup/
+.claude/settings.local.json
+.claude/worktrees/
 build/
 coverage/
 dev/
 dist/
-.nx/
 dump.rdb
-node_modules/
+node_modules
 package-lock.json
 packages/server/postgres/types/pg.d.ts
 packages/server/postgres/queries/generated
@@ -39,3 +38,6 @@ test-report.xml
 webpack-assets.json
 **/data
 backups/
+tsconfig.tsbuildinfo
+.playwright-mcp/
+.webpackCache/

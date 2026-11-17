@@ -1,0 +1,7 @@
+"""
+The date field to filter by when searching
+"""
+enum SearchDateTypeEnum {
+  createdAt
+  updatedAt
+}

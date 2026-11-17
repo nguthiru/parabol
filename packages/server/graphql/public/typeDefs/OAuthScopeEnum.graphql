@@ -1,0 +1,94 @@
+"""
+OAuth 2.0 permission scopes that control what data a third-party application can access
+"""
+enum OAuthScopeEnum {
+  """
+  Read meeting data
+  """
+  MEETINGS_READ
+
+  """
+  Create and update meetings
+  """
+  MEETINGS_WRITE
+
+  """
+  Read team data
+  """
+  TEAMS_READ
+
+  """
+  Create and update teams
+  """
+  TEAMS_WRITE
+
+  """
+  Read task data
+  """
+  TASKS_READ
+
+  """
+  Create and update tasks
+  """
+  TASKS_WRITE
+
+  """
+  Read user data
+  """
+  USERS_READ
+
+  """
+  Update user data
+  """
+  USERS_WRITE
+
+  """
+  Read organization data
+  """
+  ORGS_READ
+
+  """
+  Update organization data
+  """
+  ORGS_WRITE
+
+  """
+  Read meeting template data
+  """
+  TEMPLATES_READ
+
+  """
+  Create and update meeting templates
+  """
+  TEMPLATES_WRITE
+
+  """
+  Read page (document) data
+  """
+  PAGES_READ
+
+  """
+  Create and update pages
+  """
+  PAGES_WRITE
+
+  """
+  Read comment data
+  """
+  COMMENTS_READ
+
+  """
+  Create and update comments
+  """
+  COMMENTS_WRITE
+
+  """
+  Read reports on an organization's people, meetings and tasks
+  """
+  REPORTS_READ
+
+  """
+  Ask questions on the Reports page and keep them in your recent questions
+  """
+  REPORTS_WRITE
+}

@@ -1,5 +1,0 @@
-type RemoveReflectTemplatePromptPayload {
-  error: StandardMutationError
-  reflectTemplate: ReflectTemplate
-  prompt: ReflectPrompt
-}

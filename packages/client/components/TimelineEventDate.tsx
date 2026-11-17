@@ -1,54 +1,39 @@
-import styled from '@emotion/styled'
 import ms from 'ms'
-import {Component} from 'react'
-import {PALETTE} from '../styles/paletteV3'
+import {useEffect, useState} from 'react'
+import {Tooltip} from '../ui/Tooltip/Tooltip'
+import {TooltipContent} from '../ui/Tooltip/TooltipContent'
+import {TooltipTrigger} from '../ui/Tooltip/TooltipTrigger'
 import absoluteDate from '../utils/date/absoluteDate'
 import relativeDate from '../utils/date/relativeDate'
-import SimpleTooltip from './SimpleTooltip'
-
-const StyledSpan = styled('span')({
-  color: PALETTE.SLATE_600,
-  fontSize: 11,
-  lineHeight: '16px'
-})
-
-interface State {
-  fromNow: string
-}
 
 interface Props {
   createdAt: string | Date
 }
 
-class TimelineEventDate extends Component<Props, State> {
-  state = {
-    fromNow: relativeDate(this.props.createdAt)
-  }
-  intervalId?: number
+const TimelineEventDate = (props: Props) => {
+  const {createdAt} = props
+  const [fromNow, setFromNow] = useState(() => relativeDate(createdAt))
 
-  componentDidMount() {
-    this.intervalId = window.setInterval(() => {
-      const fromNow = relativeDate(this.props.createdAt)
-      if (fromNow !== this.state.fromNow) {
-        this.setState({
-          fromNow
-        })
-      }
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const next = relativeDate(createdAt)
+      setFromNow((prev) => (prev === next ? prev : next))
     }, ms('1m'))
-  }
+    return () => {
+      clearInterval(intervalId)
+    }
+  }, [createdAt])
 
-  componentWillUnmount(): void {
-    clearInterval(this.intervalId)
-  }
-
-  render() {
-    const {fromNow} = this.state
-    return (
-      <StyledSpan>
-        <SimpleTooltip text={absoluteDate(this.props.createdAt)}>{fromNow}</SimpleTooltip>
-      </StyledSpan>
-    )
-  }
+  return (
+    <span className='text-[11px] text-fg-secondary leading-4'>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className='cursor-pointer'>{fromNow}</span>
+        </TooltipTrigger>
+        <TooltipContent side='bottom'>{absoluteDate(createdAt)}</TooltipContent>
+      </Tooltip>
+    </span>
+  )
 }
 
 export default TimelineEventDate

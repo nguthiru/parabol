@@ -1,40 +1,33 @@
+import {GraphQLError} from 'graphql'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
 import getKysely from '../../../postgres/getKysely'
-import {getUserId, isUserBillingLeader} from '../../../utils/authorization'
 import publish from '../../../utils/publish'
-import standardError from '../../../utils/standardError'
 import type {MutationResolvers} from '../resolverTypes'
 
 const updateOrg: MutationResolvers['updateOrg'] = async (
   _source,
   {updatedOrg},
-  {authToken, dataLoader, socketId: mutatorId}
+  {socketId: mutatorId, dataLoader}
 ) => {
   const operationId = dataLoader.share()
   const subOptions = {mutatorId, operationId}
-
-  // AUTH
-  const viewerId = getUserId(authToken)
   const {id: orgId, name} = updatedOrg
-  if (!(await isUserBillingLeader(viewerId, orgId, dataLoader))) {
-    return standardError(new Error('Not organization lead'), {
-      userId: viewerId
-    })
-  }
 
   // VALIDATION
   if (!name) {
-    return {error: {message: 'Must provide a name'}}
+    throw new GraphQLError('Must provide a name', {extensions: {code: 'BAD_USER_INPUT'}})
   }
 
   const normalizedName = name.trim()
   if (normalizedName.length < 2) {
-    return {error: {message: 'The “A Team” had a longer name than that'}}
+    throw new GraphQLError('The “A Team” had a longer name than that', {
+      extensions: {code: 'BAD_USER_INPUT'}
+    })
   }
   if (normalizedName.length > 50) {
-    return {
-      error: {message: 'That isn’t very memorable. Maybe shorten it up?'}
-    }
+    throw new GraphQLError('That isn’t very memorable. Maybe shorten it up?', {
+      extensions: {code: 'BAD_USER_INPUT'}
+    })
   }
 
   // RESOLUTION

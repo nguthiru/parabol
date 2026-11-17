@@ -1,4 +1,3 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {type RefObject, useMemo, useRef} from 'react'
 import {useFragment} from 'react-relay'
@@ -11,54 +10,40 @@ import useSubColumns from '~/hooks/useSubColumns'
 import useAtmosphere from '../hooks/useAtmosphere'
 import useMutationProps from '../hooks/useMutationProps'
 import CreateReflectionMutation from '../mutations/CreateReflectionMutation'
-import {BezierCurve, DragAttribute, ElementWidth, MeetingControlBarEnum} from '../types/constEnums'
+import {DragAttribute, MeetingControlBarEnum} from '../types/constEnums'
+import {cn} from '../ui/cn'
 import getNextSortOrder from '../utils/getNextSortOrder'
 import type {SwipeColumn} from './GroupingKanban'
 import GroupingKanbanColumnHeader from './GroupingKanbanColumnHeader'
 import ReflectionGroup from './ReflectionGroup/ReflectionGroup'
-
-const ColumnScrollContainer = styled('div')({
-  display: 'flex',
-  // must hide X on firefox v84
-  overflowX: 'hidden',
-  overflowY: 'auto',
-  height: '100%'
-})
-
-const ColumnBody = styled('div')<{
-  isDesktop: boolean
-  isWidthExpanded: boolean
-}>(({isDesktop, isWidthExpanded}) => ({
-  alignContent: 'flex-start',
-  display: 'flex',
-  flex: 1,
-  flexDirection: 'row',
-  flexWrap: 'wrap',
-  justifyContent: 'space-around',
-  maxHeight: 'fit-content',
-  minHeight: 200,
-  padding: `${isWidthExpanded ? 12 : 6}px ${isDesktop ? 12 : 8}px`,
-  transition: `all 100ms ${BezierCurve.DECELERATE}`,
-  minWidth: ElementWidth.REFLECTION_COLUMN
-}))
+import ScrollEdgeIndicator from './ScrollEdgeIndicator'
 
 export type OpenSpotlight = (
   reflectionGroupId: string,
-  reflectionRef: RefObject<HTMLDivElement>
+  reflectionRef: RefObject<HTMLDivElement | null>
 ) => void
 
 interface Props {
-  columnsRef: RefObject<HTMLDivElement>
+  columnsRef: RefObject<HTMLDivElement | null>
   isAnyEditing: boolean
   isDesktop: boolean
   meeting: GroupingKanbanColumn_meeting$key
+  onHoverReflection: (reflectionId: string | null) => void
+  onGroupMatches: (reflectionGroupId: string) => void
+  onArmGroupMatches: (isArmed: boolean) => void
+  /** Hovering the Group button lights the source and every match in one shared color */
+  isGroupMatchArmed: boolean
+  /** Groups a suggestion would still merge, so each one can hint at it before being hovered */
+  suggestedGroupIds: ReadonlySet<string>
   openSpotlight: OpenSpotlight
-  phaseRef: RefObject<HTMLDivElement>
+  phaseRef: RefObject<HTMLDivElement | null>
   prompt: GroupingKanbanColumn_prompt$key
   reflectionGroups: GroupingKanbanColumn_reflectionGroups$key
   reflectPromptsCount: number
   swipeColumn?: SwipeColumn
   showDragHintAnimation?: boolean
+  /** A one-off reveal outlines every matching group at once, so "N similar" would count the board */
+  isRevealingSuggestions?: boolean
 }
 
 const GroupingKanbanColumn = (props: Props) => {
@@ -67,13 +52,19 @@ const GroupingKanbanColumn = (props: Props) => {
     isAnyEditing,
     isDesktop,
     meeting: meetingRef,
+    onHoverReflection,
+    onGroupMatches,
+    onArmGroupMatches,
+    isGroupMatchArmed,
+    suggestedGroupIds,
     openSpotlight,
     reflectionGroups: reflectionGroupsRef,
     phaseRef,
     prompt: promptRef,
     reflectPromptsCount,
     swipeColumn,
-    showDragHintAnimation
+    showDragHintAnimation,
+    isRevealingSuggestions
   } = props
   const meeting = useFragment(
     graphql`
@@ -100,6 +91,7 @@ const GroupingKanbanColumn = (props: Props) => {
       fragment GroupingKanbanColumn_reflectionGroups on RetroReflectionGroup @relay(plural: true) {
         ...ReflectionGroup_reflectionGroup
         id
+        activeReflectionGroupSimilarity
         reflections {
           id
         }
@@ -111,7 +103,7 @@ const GroupingKanbanColumn = (props: Props) => {
   )
   const prompt = useFragment(
     graphql`
-      fragment GroupingKanbanColumn_prompt on ReflectPrompt {
+      fragment GroupingKanbanColumn_prompt on TemplatePrompt {
         id
         question
         groupColor
@@ -127,8 +119,19 @@ const GroupingKanbanColumn = (props: Props) => {
   const atmosphere = useAtmosphere()
   const columnRef = useRef<HTMLDivElement>(null)
   const columnBodyRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  const similarGroupIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (isRevealingSuggestions) return ids
+    for (const group of reflectionGroups) {
+      if (group.activeReflectionGroupSimilarity != null) ids.add(group.id)
+    }
+    return ids
+  }, [reflectionGroups, isRevealingSuggestions])
+
   const isLengthExpanded =
-    useCoverable(promptId, columnRef, MeetingControlBarEnum.HEIGHT, phaseRef, columnsRef) ||
+    useCoverable(promptId, columnRef, MeetingControlBarEnum.COVER_HEIGHT, phaseRef, columnsRef) ||
     !!endedAt
   const groups = useDeepEqual(reflectionGroups)
   // group may be undefined because relay could GC before useMemo in the Kanban recomputes >:-(
@@ -158,9 +161,8 @@ const GroupingKanbanColumn = (props: Props) => {
   }
   return (
     <div
-      className={`relative mr-2 ml-2 flex h-full min-w-[320px] single-reflection-column:max-w-min flex-1 flex-col content-start rounded-lg bg-slate-300 p-0 transition-all duration-100 ease-out first-of-type:ml-4 last-of-type:mr-4 ${isLengthExpanded ? '' : 'single-reflection-column:h-[calc(100%-56px)]'} max-w-min`}
+      className={`relative mr-2 ml-2 flex h-full min-w-80 single-reflection-column:max-w-min flex-1 flex-col content-start rounded-lg bg-surface-well p-0 transition-all duration-100 ease-out first-of-type:ml-4 last-of-type:mr-4 ${isLengthExpanded ? '' : 'single-reflection-column:h-[calc(100%-68px)]'} max-w-min`}
       ref={columnRef}
-      data-cy={`group-column-${question}`}
     >
       <GroupingKanbanColumnHeader
         canAdd={canAdd}
@@ -172,13 +174,16 @@ const GroupingKanbanColumn = (props: Props) => {
         submitting={submitting}
         toggleWidth={toggleWidth}
       />
-      <ColumnScrollContainer>
+      <ScrollEdgeIndicator scrollRef={scrollContainerRef} similarGroupIds={similarGroupIds} />
+      <div className='flex h-full overflow-y-auto overflow-x-hidden' ref={scrollContainerRef}>
         {subColumnIndexes.map((subColumnIdx) => {
           return (
-            <ColumnBody
-              data-cy={subColumnIdx === 0 ? `group-column-${question}-body` : undefined}
-              isDesktop={isDesktop}
-              isWidthExpanded={isWidthExpanded}
+            <div
+              className={cn(
+                'flex max-h-fit min-h-[200px] min-w-80 flex-1 flex-row flex-wrap content-start justify-around transition-all duration-100 ease-out',
+                isWidthExpanded ? 'py-3' : 'py-1.5',
+                isDesktop ? 'px-3' : 'px-2'
+              )}
               key={`${promptId}-${subColumnIdx}`}
               ref={subColumnIdx === 0 ? columnBodyRef : undefined}
               {...{[DragAttribute.DROPZONE]: `${promptId}-${subColumnIdx}`}}
@@ -188,9 +193,13 @@ const GroupingKanbanColumn = (props: Props) => {
                 .map((reflectionGroup, idx) => {
                   return (
                     <ReflectionGroup
-                      dataCy={`${question}-group-${idx}`}
                       key={reflectionGroup.id}
                       meetingRef={meeting}
+                      onHoverReflection={onHoverReflection}
+                      onGroupMatches={onGroupMatches}
+                      onArmGroupMatches={onArmGroupMatches}
+                      isGroupMatchArmed={isGroupMatchArmed}
+                      hasSuggestion={suggestedGroupIds.has(reflectionGroup.id)}
                       openSpotlight={openSpotlight}
                       phaseRef={phaseRef}
                       reflectionGroupRef={reflectionGroup}
@@ -201,10 +210,10 @@ const GroupingKanbanColumn = (props: Props) => {
                     />
                   )
                 })}
-            </ColumnBody>
+            </div>
           )
         })}
-      </ColumnScrollContainer>
+      </div>
     </div>
   )
 }

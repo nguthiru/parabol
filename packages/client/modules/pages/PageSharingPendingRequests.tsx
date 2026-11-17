@@ -1,6 +1,6 @@
-import AddIcon from '@mui/icons-material/Add'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
+import {Add as AddIcon} from '~/ui/icons'
 import type {
   PageRoleEnum,
   PageSharingPendingRequests_page$key
@@ -57,30 +57,29 @@ export const PageSharingPendingRequests = (props: Props) => {
   }
   return (
     <>
-      <div className='p-2 font-semibold text-slate-600 text-sm'>Pending requests...</div>
+      <div className='font-semibold text-fg-secondary text-sm'>Pending requests</div>
       <div className='space-y-4'>
         {pendingRequests.map((request) => {
           const {user, role, reason} = request
           const {id: userId, preferredName: name, email, picture} = user
           return (
             <div key={userId} className='flex items-start justify-between'>
-              <div className='flex items-start gap-3 pr-2'>
-                <Avatar className='h-10 w-10' picture={picture} />
-                <div className='flex flex-col py-0.5'>
-                  <div className='font-medium text-slate-700 text-sm'>{name}</div>
-                  <div className='text-slate-800 text-xs'>{email}</div>
-                  {reason && <div className='pt-2 text-slate-800 text-sm italic'>{reason}</div>}
+              <div className='flex min-w-0 flex-1 items-start gap-3 pr-2'>
+                <Avatar className='h-10 w-10 shrink-0' picture={picture} />
+                <div className='flex min-w-0 flex-col py-0.5'>
+                  <div className='truncate font-medium text-fg-primary text-sm'>{name}</div>
+                  <div className='truncate text-fg-primary text-xs'>{email}</div>
+                  {reason && <div className='pt-2 text-fg-primary text-sm italic'>{reason}</div>}
                 </div>
               </div>
 
               <Button
                 variant='outline'
-                shape='pill'
-                className='mt-1 flex items-center gap-1 pr-4 pl-3 text-slate-700'
+                className='mt-1 flex shrink-0 items-center gap-1 px-3 py-1 text-fg-primary text-sm'
                 onClick={() => acceptRequest(userId, role)}
                 disabled={submitting}
               >
-                <AddIcon className='h-6 w-6' />
+                <AddIcon className='h-4 w-4' />
                 Add {role}
               </Button>
             </div>

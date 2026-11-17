@@ -1,66 +1,120 @@
+import {GraphQLError} from 'graphql'
 import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {RRuleSet} from 'rrule-rust'
+import {meetingsStarted} from '../../../metricsHandler'
 import getKysely from '../../../postgres/getKysely'
-import {analytics} from '../../../utils/analytics/analytics'
-import {getUserId, isTeamMember} from '../../../utils/authorization'
+import updateMeetingTemplateLastUsedAt from '../../../postgres/queries/updateMeetingTemplateLastUsedAt'
+import {getUserId} from '../../../utils/authorization'
+import {isImmediateOccurrence} from '../../../utils/isImmediateOccurrence'
 import publish from '../../../utils/publish'
 import RedisLockQueue from '../../../utils/RedisLockQueue'
-import standardError from '../../../utils/standardError'
 import createGcalEvent from '../../mutations/helpers/createGcalEvent'
+import getValidPromptTemplateId from '../../mutations/helpers/getValidPromptTemplateId'
 import isStartMeetingLocked from '../../mutations/helpers/isStartMeetingLocked'
 import {IntegrationNotifier} from '../../mutations/helpers/notifications/IntegrationNotifier'
 import safeCreateTeamPrompt from '../../mutations/helpers/safeCreateTeamPrompt'
 import type {MutationResolvers} from '../resolverTypes'
-import {startNewMeetingSeries} from './updateRecurrenceSettings'
+import {createMeetingSeries, startNewMeetingSeries} from './updateRecurrenceSettings'
 
 const MEETING_START_DELAY_MS = 3000
 
 const startTeamPrompt: MutationResolvers['startTeamPrompt'] = async (
   _source,
-  {teamId, name, rrule, gcalInput},
+  {teamId, name, rrule: rruleString, gcalInput},
   {authToken, dataLoader, socketId: mutatorId}
 ) => {
   const operationId = dataLoader.share()
   const subOptions = {mutatorId, operationId}
+  const rrule = rruleString ? RRuleSet.parse(rruleString) : null
 
   // AUTH
   const viewerId = getUserId(authToken)
-  if (!isTeamMember(authToken, teamId)) {
-    return standardError(new Error('Team not found'), {userId: viewerId})
-  }
-  const [unpaidError, viewer] = await Promise.all([
+
+  const [unpaidError, meetingSettings] = await Promise.all([
     isStartMeetingLocked(teamId, dataLoader),
-    dataLoader.get('users').loadNonNull(viewerId)
+    dataLoader.get('meetingSettingsByType').load({teamId, meetingType: 'teamPrompt'})
   ])
-  if (unpaidError) return standardError(new Error(unpaidError), {userId: viewerId})
+  if (unpaidError) throw new GraphQLError(unpaidError, {extensions: {code: 'FORBIDDEN'}})
+
+  const templateId = await getValidPromptTemplateId(
+    meetingSettings?.selectedTemplateId,
+    'teamPrompt',
+    dataLoader
+  )
+
+  const meetingName = name || 'Standup'
+  const eventName = rrule ? name || 'Standup' : meetingName
+
+  if (rrule && !isImmediateOccurrence(rrule)) {
+    const scheduleLock = new RedisLockQueue(`newMeetingSeries:${teamId}`, MEETING_START_DELAY_MS)
+    try {
+      await scheduleLock.lock(0)
+    } catch {
+      throw new GraphQLError('Meeting already scheduled', {extensions: {code: 'CONFLICT'}})
+    }
+    const meetingSeries = await createMeetingSeries({
+      meetingType: 'teamPrompt',
+      title: name || meetingName,
+      recurrenceRule: rrule,
+      teamId,
+      facilitatorId: viewerId,
+      templateId
+    })
+    const {error: gcalError, gcalSeriesId} = await createGcalEvent({
+      name: eventName,
+      gcalInput,
+      meetingId: null,
+      meetingSeriesId: meetingSeries.id,
+      teamId,
+      viewerId,
+      rrule,
+      dataLoader
+    })
+    if (gcalSeriesId) {
+      await getKysely()
+        .updateTable('MeetingSeries')
+        .set({gcalSeriesId})
+        .where('id', '=', meetingSeries.id)
+        .execute()
+    }
+    const data = {
+      teamId,
+      meetingId: null,
+      meetingSeriesId: meetingSeries.id,
+      hasGcalError: !!gcalError?.message
+    }
+    publish(SubscriptionChannel.TEAM, teamId, 'StartTeamPromptSuccess', data, subOptions)
+    return data
+  }
 
   const redisLock = new RedisLockQueue(`newTeamPromptMeeting:${teamId}`, MEETING_START_DELAY_MS)
   try {
     await redisLock.lock(0)
   } catch {
-    return standardError(new Error('Meeting already started'), {
-      userId: viewerId
-    })
+    throw new GraphQLError('Meeting already started', {extensions: {code: 'CONFLICT'}})
   }
 
-  const meetingName = name || 'Standup'
-  const eventName = rrule ? name || 'Standup' : meetingName
-  const meeting = await safeCreateTeamPrompt(meetingName, teamId, viewerId, dataLoader)
+  const meeting = await safeCreateTeamPrompt(meetingName, teamId, viewerId, dataLoader, {
+    templateId
+  })
   if (!meeting) {
-    return {error: {message: 'Meeting already started'}}
+    throw new GraphQLError('Meeting already started', {extensions: {code: 'CONFLICT'}})
   }
   const {id: meetingId} = meeting
-  const meetingSeries = rrule && (await startNewMeetingSeries(meeting, rrule, name))
+  await updateMeetingTemplateLastUsedAt(meeting.templateId, teamId)
+  const meetingSeries =
+    rrule && (await startNewMeetingSeries(meeting, rrule, name, {templateId: meeting.templateId}))
   if (meetingSeries) {
     // meeting was modified if a new meeting series was created
     dataLoader.get('newMeetings').clear(meetingId)
-    analytics.recurrenceStarted(viewer, meetingSeries)
   }
   IntegrationNotifier.startMeeting(dataLoader, meetingId, teamId)
-  analytics.meetingStarted(viewer, meeting)
+  meetingsStarted.inc({meeting_type: meeting.meetingType})
   const {error, gcalSeriesId} = await createGcalEvent({
     name: eventName,
     gcalInput,
     meetingId,
+    meetingSeriesId: meetingSeries ? meetingSeries.id : null,
     teamId,
     viewerId,
     rrule,
@@ -74,7 +128,12 @@ const startTeamPrompt: MutationResolvers['startTeamPrompt'] = async (
       .where('id', '=', meetingSeries.id)
       .execute()
   }
-  const data = {teamId, meetingId: meetingId, hasGcalError: !!error?.message}
+  const data = {
+    teamId,
+    meetingId: meetingId,
+    meetingSeriesId: meetingSeries ? meetingSeries.id : null,
+    hasGcalError: !!error?.message
+  }
   publish(SubscriptionChannel.TEAM, teamId, 'StartTeamPromptSuccess', data, subOptions)
   return data
 }

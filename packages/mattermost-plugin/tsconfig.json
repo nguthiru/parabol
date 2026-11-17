@@ -1,11 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": "../",
     "paths": {
-      "parabol-client/*": ["client/*"],
-      "~/*": ["client/*"]
+      "parabol-client/*": ["../client/*"],
+      "~/*": ["../client/*"]
     },
     "lib": ["esnext", "dom", "dom.iterable"]
-  }
+  },
+  "include": ["**/*", "../types/**/*"]
 }

@@ -1,4 +1,0 @@
-type ReflectTemplatePromptUpdateDescriptionPayload {
-  error: StandardMutationError
-  prompt: ReflectPrompt
-}

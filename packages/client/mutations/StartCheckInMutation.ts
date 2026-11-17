@@ -1,7 +1,7 @@
 import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import type {StartCheckInMutation as TStartCheckInMutation} from '../__generated__/StartCheckInMutation.graphql'
-import type {HistoryLocalHandler, StandardMutation} from '../types/relayMutations'
+import type {NavigateLocalHandler, StandardMutation} from '../types/relayMutations'
 
 graphql`
   fragment StartCheckInMutation_team on StartCheckInSuccess {
@@ -16,22 +16,34 @@ graphql`
 `
 
 const mutation = graphql`
-  mutation StartCheckInMutation($teamId: ID!, $gcalInput: CreateGcalEventInput) {
-    startCheckIn(teamId: $teamId, gcalInput: $gcalInput) {
+  mutation StartCheckInMutation(
+    $teamId: ID!
+    $gcalInput: CreateGcalEventInput
+    $ignoreSuggestedUpgrade: Boolean
+  ) {
+    startCheckIn(teamId: $teamId, gcalInput: $gcalInput, ignoreSuggestedUpgrade: $ignoreSuggestedUpgrade) {
       ... on ErrorPayload {
         error {
           message
         }
       }
-      ...StartCheckInMutation_team @relay(mask: false)
+      ... on StartCheckInSuccess {
+        meeting {
+          # lets useJoinedMeetingQuery subscribe while the starter joins
+          viewerMeetingMember {
+            id
+          }
+        }
+      }
+      ...StartCheckInMutation_team @relay(mask: false) @alias
     }
   }
 `
 
-const StartCheckInMutation: StandardMutation<TStartCheckInMutation, HistoryLocalHandler> = (
+const StartCheckInMutation: StandardMutation<TStartCheckInMutation, NavigateLocalHandler> = (
   atmosphere,
   variables,
-  {history, onError, onCompleted}
+  {navigate, onError, onCompleted}
 ) => {
   return commitMutation<TStartCheckInMutation>(atmosphere, {
     mutation,
@@ -40,7 +52,7 @@ const StartCheckInMutation: StandardMutation<TStartCheckInMutation, HistoryLocal
     onCompleted: (res, errors) => {
       onCompleted(res, errors)
       const {startCheckIn} = res
-      const {meeting, hasGcalError} = startCheckIn
+      const {meeting, hasGcalError} = startCheckIn.StartCheckInMutation_team ?? {}
       if (!meeting) return
       const {id: meetingId} = meeting
       if (hasGcalError) {
@@ -51,7 +63,7 @@ const StartCheckInMutation: StandardMutation<TStartCheckInMutation, HistoryLocal
           message: `Sorry, we couldn't create your Google Calendar event`
         })
       }
-      history.push(`/meet/${meetingId}`)
+      navigate(`/meet/${meetingId}`)
     }
   })
 }

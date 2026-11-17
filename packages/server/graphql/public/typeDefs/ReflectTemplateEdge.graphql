@@ -1,11 +1,11 @@
 """
-An edge in a connection.
+A paginated edge containing a single retrospective reflection template
 """
 type ReflectTemplateEdge {
   """
   The item at the end of the edge
   """
-  node: ReflectTemplate!
+  node: PromptTemplate!
 
   """
   A cursor for use in pagination

@@ -1,102 +1,101 @@
-import styled from '@emotion/styled'
+import graphql from 'babel-plugin-relay/macro'
 import type * as React from 'react'
 import {useState} from 'react'
+import {useFragment} from 'react-relay'
 import useAtmosphere from '~/hooks/useAtmosphere'
-import DeleteUserMutation from '../mutations/DeleteUserMutation'
+import type {DeleteAccountModal_viewer$key} from '../__generated__/DeleteAccountModal_viewer.graphql'
+import useDeleteUserMutation from '../mutations/useDeleteUserMutation'
 import {ExternalLinks} from '../types/constEnums'
-import DialogContainer from './DialogContainer'
-import DialogContent from './DialogContent'
-import DialogTitle from './DialogTitle'
+import {Button} from '../ui/Button/Button'
+import {Dialog} from '../ui/Dialog/Dialog'
+import {DialogActions} from '../ui/Dialog/DialogActions'
+import {DialogContent} from '../ui/Dialog/DialogContent'
+import {DialogTitle} from '../ui/Dialog/DialogTitle'
+import DeleteAccountReAuthStep from './DeleteAccountReAuthStep'
 import BasicTextArea from './InputField/BasicTextArea'
-import PrimaryButton from './PrimaryButton'
 
-const INVITE_DIALOG_BREAKPOINT = 864
-const INVITE_DIALOG_MEDIA_QUERY = `@media (min-width: ${INVITE_DIALOG_BREAKPOINT}px)`
+interface Props {
+  isOpen: boolean
+  onClose: () => void
+  viewerRef: DeleteAccountModal_viewer$key
+}
 
-const StyledDialogContainer = styled(DialogContainer)({
-  width: 400
-})
-
-const StyledDialogTitle = styled(DialogTitle)({
-  [INVITE_DIALOG_MEDIA_QUERY]: {
-    fontSize: 24,
-    lineHeight: '32px',
-    marginBottom: 8,
-    paddingLeft: 32,
-    paddingTop: 24
-  }
-})
-
-const StyledDialogContent = styled(DialogContent)({
-  [INVITE_DIALOG_MEDIA_QUERY]: {
-    alignItems: 'center',
-    display: 'flex',
-    padding: '16px 32px 32px'
-  }
-})
-
-const Fields = styled('div')({
-  [INVITE_DIALOG_MEDIA_QUERY]: {
-    maxWidth: 320
-  }
-})
-
-const ButtonGroup = styled('div')({
-  marginTop: '24px',
-  display: 'flex',
-  justifyContent: 'flex-end'
-})
-
-const StyledCopy = styled('p')({
-  alignItems: 'center',
-  display: 'flex',
-  fontSize: 15,
-  lineHeight: '21px',
-  padding: '0 0 16px',
-  textTransform: 'none'
-})
-
-const DeleteAccountModal = () => {
+const DeleteAccountModal = ({isOpen, onClose, viewerRef}: Props) => {
+  const viewer = useFragment(
+    graphql`
+      fragment DeleteAccountModal_viewer on User {
+        ...DeleteAccountReAuthStep_viewer
+      }
+    `,
+    viewerRef
+  )
+  const [step, setStep] = useState<'reason' | 'reauth'>('reason')
   const [reason, setReason] = useState('')
   const atmosphere = useAtmosphere()
+  const [deleteUser, submitting] = useDeleteUserMutation()
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setReason(e.target.value)
   }
   const validReason = reason.trim().slice(0, 20000)
   const handleDelete = () => {
-    DeleteUserMutation(atmosphere, {
-      userId: atmosphere.viewerId,
-      reason: validReason
+    if (submitting) return
+    deleteUser({
+      variables: {userId: atmosphere.viewerId, reason: validReason},
+      onCompleted: (res) => {
+        if (res.deleteUser.error?.message?.includes('re-authenticate')) {
+          setStep('reauth')
+        } else {
+          window.location.href = ExternalLinks.RESOURCES
+        }
+      }
     })
-    setTimeout(() => {
-      window.location.href = ExternalLinks.RESOURCES
-    }, 100)
   }
 
   return (
-    <StyledDialogContainer>
-      <StyledDialogTitle>How could we do better?</StyledDialogTitle>
-      <StyledDialogContent>
-        <Fields>
-          <StyledCopy>
-            {'We’re on a mission to make every meeting worth the time invested.'}
-          </StyledCopy>
-          <StyledCopy>{'If there is anything we can do to improve, let us know below.'}</StyledCopy>
-          <BasicTextArea
-            autoFocus
-            name='reason'
-            onChange={onChange}
-            placeholder=''
-            value={reason}
-          />
-          <ButtonGroup>
-            <PrimaryButton onClick={handleDelete} disabled={!reason} size='medium'>
-              {'Goodbye forever'}
-            </PrimaryButton>
-          </ButtonGroup>
-        </Fields>
-      </StyledDialogContent>
-    </StyledDialogContainer>
+    <Dialog isOpen={isOpen} onClose={onClose}>
+      <DialogContent>
+        {step === 'reauth' ? (
+          <div>
+            <DialogTitle className='mb-4 flex justify-center'>Verify your identity</DialogTitle>
+            <div className='flex flex-col items-center'>
+              <p className='w-full max-w-[240px] pb-4 text-[15px] leading-5'>
+                {'Please verify your identity before deleting your account.'}
+              </p>
+              <DeleteAccountReAuthStep viewerRef={viewer} onReAuthSuccess={handleDelete} />
+            </div>
+          </div>
+        ) : (
+          <div>
+            <DialogTitle className='mb-2'>How could we do better?</DialogTitle>
+            <div>
+              <p className='flex items-center pb-4 text-[15px] leading-[21px]'>
+                {'We’re on a mission to make every meeting worth the time invested.'}
+              </p>
+              <p className='flex items-center pb-4 text-[15px] leading-[21px]'>
+                {'If there is anything we can do to improve, let us know below.'}
+              </p>
+              <BasicTextArea
+                autoFocus
+                name='reason'
+                onChange={onChange}
+                placeholder=''
+                value={reason}
+              />
+              <DialogActions>
+                <Button
+                  variant='primary'
+                  size='md'
+                  onClick={handleDelete}
+                  disabled={!reason || submitting}
+                >
+                  {'Goodbye forever'}
+                </Button>
+              </DialogActions>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

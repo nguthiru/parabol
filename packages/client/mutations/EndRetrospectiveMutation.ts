@@ -7,15 +7,18 @@ import onMeetingRoute from '~/utils/onMeetingRoute'
 import type {EndRetrospectiveMutation as TEndRetrospectiveMutation} from '../__generated__/EndRetrospectiveMutation.graphql'
 import {RetroDemo} from '../types/constEnums'
 import type {
-  HistoryMaybeLocalHandler,
+  NavigateMaybeLocalHandler,
   OnNextHandler,
-  OnNextHistoryContext,
+  OnNextNavigateContext,
   SharedUpdater,
   StandardMutation
 } from '../types/relayMutations'
 import {GQLID} from '../utils/GQLID'
+import safeRemoveNodeFromArray from '../utils/relay/safeRemoveNodeFromArray'
 import handleAddTimelineEvent from './handlers/handleAddTimelineEvent'
 import handleRemoveSuggestedActions from './handlers/handleRemoveSuggestedActions'
+import handleRemoveTasks from './handlers/handleRemoveTasks'
+import {snackOnError} from './handlers/snackOnError'
 import popEndMeetingToast from './toasts/popEndMeetingToast'
 
 graphql`
@@ -36,15 +39,12 @@ graphql`
       summaryPageId
     }
     team {
-      ...TeamInsights_team
       id
-      activeMeetings {
-        id
-      }
     }
     timelineEvent {
-      ...TimelineEventCompletedRetroMeeting_timelineEvent @relay(mask: false)
+      ...TimelineEventCompletedRetroMeeting_timelineEvent @relay(mask: false) @alias
     }
+    updatedTaskIds
   }
 `
 
@@ -71,35 +71,35 @@ const mutation = graphql`
           message
         }
       }
-      ...EndRetrospectiveMutation_notification @relay(mask: false)
-      ...EndRetrospectiveMutation_team @relay(mask: false)
-      ...EndRetrospectiveMutation_meeting @relay(mask: false)
+      ...EndRetrospectiveMutation_notification @relay(mask: false) @alias
+      ...EndRetrospectiveMutation_team @relay(mask: false) @alias
+      ...EndRetrospectiveMutation_meeting @relay(mask: false) @alias
     }
   }
 `
 
 export const endRetrospectiveTeamOnNext: OnNextHandler<
   EndRetrospectiveMutation_team$data,
-  OnNextHistoryContext
+  OnNextNavigateContext
 > = (payload, context) => {
   const {isKill, meeting} = payload
-  const {atmosphere, history} = context
+  const {atmosphere, navigate} = context
   if (!meeting) return
   const {id: meetingId, teamId, summaryPageId} = meeting
   if (meetingId === RetroDemo.MEETING_ID) {
     if (isKill) {
       window.localStorage.removeItem('retroDemo')
-      history.push('/create-account')
+      navigate('/create-account')
     } else {
-      history.push('/retrospective-demo-summary')
+      navigate('/retrospective-demo-summary')
     }
   } else if (onMeetingRoute(window.location.pathname, [meetingId])) {
     if (isKill) {
-      history.push(`/team/${teamId}`)
+      navigate(`/team/${teamId}`)
       popEndMeetingToast(atmosphere, meetingId)
     } else if (summaryPageId) {
       const pageCode = GQLID.fromKey(summaryPageId)[0]
-      history.push(`/pages/${pageCode}`)
+      navigate(`/pages/${pageCode}`)
     }
   }
 }
@@ -117,13 +117,19 @@ export const endRetrospectiveTeamUpdater: SharedUpdater<EndRetrospectiveMutation
 ) => {
   const meeting = payload.getLinkedRecord('meeting') as RecordProxy
   const timelineEvent = payload.getLinkedRecord('timelineEvent') as RecordProxy
+  const updatedTaskIds = payload.getValue('updatedTaskIds')
   handleAddTimelineEvent(meeting, timelineEvent, store)
+  safeRemoveNodeFromArray(meeting?.getDataID(), payload.getLinkedRecord('team'), 'activeMeetings')
+  // Tasks archived by the Review Tasks phase: remove them from active task
+  // connections so the UI immediately reflects the archive (full record stays in the
+  // store, so archive views can still load them).
+  handleRemoveTasks(updatedTaskIds as any, store)
 }
 
 const EndRetrospectiveMutation: StandardMutation<
   TEndRetrospectiveMutation,
-  HistoryMaybeLocalHandler
-> = (atmosphere, variables, {onError, onCompleted, history}) => {
+  NavigateMaybeLocalHandler
+> = (atmosphere, variables, {onError, onCompleted, navigate}) => {
   return commitMutation<TEndRetrospectiveMutation>(atmosphere, {
     mutation,
     variables,
@@ -138,12 +144,14 @@ const EndRetrospectiveMutation: StandardMutation<
       if (onCompleted) {
         onCompleted(res, errors)
       }
-      endRetrospectiveTeamOnNext(res.endRetrospective as any, {
+      const payload = res.endRetrospective.EndRetrospectiveMutation_team
+      if (!payload) return
+      endRetrospectiveTeamOnNext(payload, {
         atmosphere,
-        history
+        navigate
       })
     },
-    onError
+    onError: onError ?? snackOnError(atmosphere)
   })
 }
 

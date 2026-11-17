@@ -1,4 +1,3 @@
-import type EventEmitter from 'node:events'
 import type {IncomingHttpHeaders} from 'node:http2'
 import {
   type afterUnloadDocumentPayload,
@@ -6,11 +5,16 @@ import {
   type Hocuspocus,
   IncomingMessage,
   type onConfigurePayload,
-  type onLoadDocumentPayload
+  type onLoadDocumentPayload,
+  type WebSocketLike
 } from '@hocuspocus/server'
+import {GraphQLError, type GraphQLErrorExtensions} from 'graphql'
 import type RedisClient from 'ioredis'
-import {readVarString} from 'lib0/decoding.js'
 import {HocusPocusProxySocket} from '../../HocusPocusProxySocket'
+import {Logger} from '../Logger'
+import logRedisErrors from '../logRedisErrors'
+import parseSessionId from '../parseSessionId'
+import {type RequestLogContext, runWithLogContext, runWithoutLogContext} from '../requestLogContext'
 
 export type SecondParam<T> = T extends (arg1: any, arg2: infer A, ...args: any[]) => any ? A : never
 export type RSAMessageProxy = {
@@ -37,17 +41,6 @@ export type RSAMessageClose = {
   socketId: string
 }
 
-export type RSAMessagePing = {
-  type: 'ping'
-  socketId: string
-  replyTo: string
-}
-
-export type RSAMessagePong = {
-  type: 'pong'
-  socketId: string
-}
-
 export type RSAMessageSend = {
   type: 'send'
   message: Uint8Array<ArrayBufferLike>
@@ -67,6 +60,7 @@ export type RSAMessageCustomEventComplete = {
   type: 'customEventComplete'
   replyId: number
   payload: any
+  error?: {message: string; code?: GraphQLErrorExtensions['code']}
 }
 
 export type RSAMessage =
@@ -74,8 +68,6 @@ export type RSAMessage =
   | RSAMessageCloseProxy
   | RSAMessageUnload
   | RSAMessageClose
-  | RSAMessagePing
-  | RSAMessagePong
   | RSAMessageSend
   | RSAMessageCustomEventStart
   | RSAMessageCustomEventComplete
@@ -83,8 +75,10 @@ export type RSAMessage =
 export type SerializedHTTPRequest = {
   method: string
   url: string
-  headers: IncomingHttpHeaders
+  headers: Omit<IncomingHttpHeaders, 'sec-websocket-key'> & {'sec-websocket-key': string}
   socket: {remoteAddress: string}
+  // set once at upgrade, so every server that handles the socket agrees on when it opened
+  connectedAt: number
 }
 export type Pack = (msg: RSAMessage) => string | Buffer<ArrayBufferLike>
 type Unpack = (packedMessage: Uint8Array | Buffer<ArrayBufferLike>) => RSAMessage
@@ -93,6 +87,18 @@ type DocumentName = string
 type SocketId = string
 type CustomEventName = string
 type CustomEvents = Record<CustomEventName, (documentName: string, payload: any) => Promise<any>>
+// Not exported by @hocuspocus/server
+type ClientConnection = ReturnType<Hocuspocus['handleConnection']>
+type OriginConnection = {
+  clientConnection: ClientConnection
+  socket: WebSocketLike
+  logContext: RequestLogContext
+}
+type ProxyConnection = {
+  clientConnection: ClientConnection
+  socket: HocusPocusProxySocket
+  logContext: RequestLogContext
+}
 
 interface Configuration<TCE> {
   redis: RedisClient
@@ -103,13 +109,46 @@ interface Configuration<TCE> {
   customEventTTL?: number
   prefix?: string
   customEvents?: TCE
+  // Derive the hocuspocus context once per socket instead of re-deriving it in a
+  // per-document hook like onConnect/onAuthenticate. Runs on the origin server when
+  // the socket opens and on the doc owner when the first proxied message arrives.
+  deriveContext?: (serializedHTTPRequest: SerializedHTTPRequest) => Record<string, any>
 }
 
-interface BaseWebSocket extends EventEmitter {
-  readyState: number
-  close(code?: number, reason?: string | ArrayBufferLike): void
-  ping(): void
-  send(message: Uint8Array): void
+// uWS decodes header bytes as UTF-8 (invalid bytes become U+FFFD), but Headers only accepts byte strings
+const toByteString = (value: string) => Buffer.from(value, 'utf8').toString('latin1')
+
+// Hocuspocus logs the connection limits it enforces from inside handleMessage, including on the doc owner
+const getConnectionLogContext = (
+  {url, socket}: SerializedHTTPRequest,
+  context: Record<string, any>
+): RequestLogContext => ({
+  userId: context.userId,
+  ip: socket.remoteAddress,
+  sessionId: parseSessionId(new URL(url, 'http://localhost').searchParams.get('sessionId')),
+  component: 'yjs'
+})
+
+// Hocuspocus expects a web-standard Request, so rehydrate one from what crossed the wire
+export const toWebRequest = (serializedHTTPRequest: SerializedHTTPRequest) => {
+  const {method, url, headers} = serializedHTTPRequest
+  const webHeaders = new Headers()
+  Object.entries(headers).forEach(([name, value]) => {
+    if (value === undefined) return
+    const values = Array.isArray(value) ? value : [value]
+    try {
+      values.forEach((v) => {
+        webHeaders.append(name, toByteString(v))
+      })
+    } catch {
+      webHeaders.delete(name)
+      Logger.warn(`toWebRequest: dropped invalid header ${JSON.stringify(name)}`)
+    }
+  })
+  return new Request(new URL(url, 'http://localhost'), {
+    method,
+    headers: webHeaders
+  })
 }
 
 export class RedisServerAffinity<TCE extends CustomEvents> implements Extension {
@@ -118,10 +157,10 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
   private sub: RedisClient
   private pack: Pack
   private unpack: Unpack
-  private originSockets: Record<SocketId, BaseWebSocket> = {}
+  private originConnections: Record<SocketId, OriginConnection> = {}
   private locks: Record<DocumentName, NodeJS.Timeout> = {}
   private lockPromises: Record<DocumentName, Promise<ServerId | null>> = {}
-  private proxySockets: Record<SocketId, HocusPocusProxySocket> = {}
+  private proxyConnections: Record<SocketId, ProxyConnection> = {}
   private prefix: string
   private lockPrefix: string
   private msgChannel: string
@@ -130,13 +169,25 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
   private lockTTL: number
   private instance!: Hocuspocus
   private customEvents: TCE
-  private replyIdCounter: number = 0
-  private pendingReplies: Record<number, PromiseWithResolvers<any>['resolve']> = {}
+  private replyIdCounter = 0
+  private pendingReplies: Record<number, Pick<PromiseWithResolvers<any>, 'resolve' | 'reject'>> = {}
+  private deriveContext: (serializedHTTPRequest: SerializedHTTPRequest) => Record<string, any>
   constructor(configuration: Configuration<TCE>) {
-    const {redis, pack, unpack, serverId, lockTTL, prefix, customEvents, customEventTTL} =
-      configuration
+    const {
+      redis,
+      pack,
+      unpack,
+      serverId,
+      lockTTL,
+      prefix,
+      customEvents,
+      customEventTTL,
+      deriveContext
+    } = configuration
     this.pub = redis.duplicate()
     this.sub = redis.duplicate()
+    logRedisErrors(this.pub, 'redisServerAffinity_pub')
+    logRedisErrors(this.sub, 'redisServerAffinity_sub')
     this.pack = pack
     this.unpack = unpack
     this.serverId = serverId
@@ -146,6 +197,7 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
     this.lockPrefix = `${this.prefix}Lock`
     this.msgChannel = `${this.prefix}Msg`
     this.customEvents = (customEvents as any) ?? ({} as any as CustomEvents)
+    this.deriveContext = deriveContext ?? (() => ({}))
     this.sub.subscribe(this.msgChannel, `${this.msgChannel}:${this.serverId}`)
     this.sub.on('messageBuffer', this.handleRedisMessage)
   }
@@ -154,15 +206,14 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
   }
 
   private closeProxy(socketId: string) {
-    const proxySocket = this.proxySockets[socketId]
-    if (proxySocket) {
-      proxySocket.emit('close', 1000, Buffer.from('provider_initiated', 'utf-8'))
-      delete this.proxySockets[socketId]
+    const entry = this.proxyConnections[socketId]
+    if (entry) {
+      delete this.proxyConnections[socketId]
+      const {socket, clientConnection} = entry
+      // The origin socket is already gone; don't echo a close message back
+      socket.markClosed()
+      clientConnection.handleClose({code: 1000, reason: 'provider_initiated'})
     }
-  }
-
-  private pongProxy(socketId: string) {
-    this.proxySockets[socketId]?.emit('pong')
   }
 
   private handleProxyMessage(
@@ -170,20 +221,26 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
   ) {
     const {replyTo, message, serializedHTTPRequest} = msg
     const {headers} = serializedHTTPRequest
-    const socketId = headers['sec-websocket-key']!
-    let socket = this.proxySockets[socketId]
-    if (!socket) {
-      socket = new HocusPocusProxySocket(
-        this.pub,
-        this.pack,
-        replyTo,
-        `${this.msgChannel}:${this.serverId}`,
-        socketId
+    const socketId = headers['sec-websocket-key']
+    let entry = this.proxyConnections[socketId]
+    if (!entry) {
+      const socket = new HocusPocusProxySocket(this.pub, this.pack, replyTo, socketId)
+      const context = this.deriveContext(serializedHTTPRequest)
+      const clientConnection = this.instance.handleConnection(
+        socket,
+        toWebRequest(serializedHTTPRequest),
+        context
       )
-      this.proxySockets[socketId] = socket
-      this.instance.handleConnection(socket as any, serializedHTTPRequest as any, {})
+      const logContext = getConnectionLogContext(serializedHTTPRequest, context)
+      entry = {clientConnection, socket, logContext}
+      this.proxyConnections[socketId] = entry
     }
-    socket.emit('message', message)
+    const {clientConnection, logContext} = entry
+    runWithLogContext(logContext, () => clientConnection.handleMessage(message))
+  }
+
+  private getLock(documentName: string) {
+    return this.pub.get(this.getKey(documentName))
   }
 
   private getOrClaimLock(documentName: string) {
@@ -211,7 +268,15 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
     return this.getOrClaimLock(documentName)
   }
 
-  private handleRedisMessage = async (_channel: Buffer, packedMessage: Buffer) => {
+  private handleRedisMessage = async (channel: Buffer, packedMessage: Buffer) => {
+    try {
+      await this.routeRedisMessage(packedMessage)
+    } catch (e) {
+      Logger.error(`RedisServerAffinity: failed to handle message on ${channel}`, e)
+    }
+  }
+
+  private async routeRedisMessage(packedMessage: Buffer) {
     const msg = this.unpack(packedMessage) as RSAMessage
     const {type} = msg
     if (type === 'proxy') {
@@ -222,63 +287,74 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
       this.closeProxy(msg.socketId)
       return
     }
-    if (type === 'pong') {
-      this.pongProxy(msg.socketId)
-      return
-    }
     if (type === 'unload') {
       delete this.lockPromises[msg.documentName]
       return
     }
     if (type === 'customEventStart') {
       const {documentName, eventName, payload, replyTo, replyId} = msg
-      const res = await this.handleEventLocally(
-        eventName as Extract<keyof TCE, string>,
-        documentName,
-        payload
-      )
       const reply: RSAMessageCustomEventComplete = {
         type: 'customEventComplete',
         replyId,
-        payload: res
+        payload: null
       }
-      this.pub.publish(`${replyTo}`, this.pack(reply))
+      try {
+        reply.payload = await this.handleEventLocally(
+          eventName as Extract<keyof TCE, string>,
+          documentName,
+          payload
+        )
+      } catch (e) {
+        if (e instanceof GraphQLError) {
+          reply.error = {message: e.message, code: e.extensions.code}
+        } else {
+          Logger.error(`RedisServerAffinity: ${eventName} failed on ${documentName}`, e)
+          reply.error = {message: e instanceof Error ? e.message : String(e)}
+        }
+      }
+      this.pub.publish(`${replyTo}`, this.pack(reply)).catch(Logger.error)
       return
     }
     if (type === 'customEventComplete') {
-      const {replyId, payload} = msg
-      const resolveFn = this.pendingReplies[replyId]
-      if (!resolveFn) return
+      const {replyId, payload, error} = msg
+      const pendingReply = this.pendingReplies[replyId]
+      if (!pendingReply) return
       delete this.pendingReplies[replyId]
-      resolveFn(payload)
+      if (!error) {
+        pendingReply.resolve(payload)
+      } else if (error.code) {
+        pendingReply.reject(new GraphQLError(error.message, {extensions: {code: error.code}}))
+      } else {
+        pendingReply.reject(new Error(error.message))
+      }
       return
     }
     const {socketId} = msg
-    const socket = this.originSockets[socketId]
-    if (!socket) {
+    const entry = this.originConnections[socketId]
+    if (!entry) {
       // origin socket already cleaned up
       return
     }
+    const {socket} = entry
     if (type === 'close') {
       socket.close(msg.code, msg.reason)
-    } else if (type === 'ping') {
-      // Reply instantly to the proxy socket, without forwarding to client
-      // The origin socket handles heartbeat for itself
-      const {replyTo, socketId} = msg
-      const reply: RSAMessagePong = {
-        type: 'pong',
-        socketId
-      }
-      this.pub.publish(`${replyTo}`, this.pack(reply))
     } else if (type === 'send') {
       socket.send(msg.message)
     }
   }
 
   async maintainLock(documentName: string) {
-    this.locks[documentName] = setInterval(() => {
-      this.pub.set(this.getKey(documentName), this.serverId, 'PX', this.lockTTL)
-    }, this.lockTTL / 2)
+    // Clear any existing interval to prevent leaking it when called more than once
+    // (e.g. both onLoadDocument and lockDocument call this for the same document)
+    clearInterval(this.locks[documentName])
+    // The lock outlives the socket or operation that loaded the document, so it must not keep their log context
+    this.locks[documentName] = runWithoutLogContext(() =>
+      setInterval(() => {
+        this.pub
+          .set(this.getKey(documentName), this.serverId, 'PX', this.lockTTL)
+          .catch(Logger.error)
+      }, this.lockTTL / 2)
+    )
   }
 
   async releaseLock(documentName: string) {
@@ -301,7 +377,9 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
   async handleEvent<TName extends Extract<keyof TCE, string>>(
     eventName: TName,
     documentName: string,
-    payload: any
+    payload: any,
+    // if true, don't claim the lock. Useful for targeting pages that are currently open
+    onlyIfOpen = false
   ) {
     const isDocLoadedOnInstance = this.instance.documents.has(documentName)
 
@@ -309,7 +387,14 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
       return this.handleEventLocally(eventName, documentName, payload)
     }
 
-    const proxyTo = await this.getOrClaimLockThrottled(documentName)
+    const proxyTo = await (onlyIfOpen
+      ? this.getLock(documentName)
+      : this.getOrClaimLockThrottled(documentName))
+
+    if (!proxyTo && onlyIfOpen) {
+      return
+    }
+
     if (proxyTo && proxyTo !== this.serverId) {
       ++this.replyIdCounter // bug in biome thinks this.replyIdCounter is not used if written on the line below
       const replyId = this.replyIdCounter
@@ -323,11 +408,12 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
         type: 'customEventStart'
       }
       const msg = this.pack(proxyMessage)
-      this.pub.publish(`${this.msgChannel}:${proxyTo}`, msg)
+      this.pub.publish(`${this.msgChannel}:${proxyTo}`, msg).catch(Logger.error)
       const {promise, resolve, reject} = Promise.withResolvers()
-      this.pendingReplies[replyId] = resolve
+      this.pendingReplies[replyId] = {resolve, reject}
       setTimeout(() => {
-        reject('TIMEOUT')
+        delete this.pendingReplies[replyId]
+        reject(new Error('TIMEOUT'))
       }, this.customEventTTL)
       return promise as Promise<ReturnType<TCE[TName]>>
     }
@@ -345,24 +431,36 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
   }
 
   /* WebSocket Server Hooks */
-  onSocketOpen(ws: BaseWebSocket, serializedHTTPRequest: SerializedHTTPRequest, context = {}) {
-    const socketId = serializedHTTPRequest.headers['sec-websocket-key']!
-    this.originSockets[socketId] = ws
-    this.instance.handleConnection(ws as any, serializedHTTPRequest as any, context)
+  onSocketOpen(ws: WebSocketLike, serializedHTTPRequest: SerializedHTTPRequest) {
+    const socketId = serializedHTTPRequest.headers['sec-websocket-key']
+    const context = this.deriveContext(serializedHTTPRequest)
+    const clientConnection = this.instance.handleConnection(
+      ws,
+      toWebRequest(serializedHTTPRequest),
+      context
+    )
+    const logContext = getConnectionLogContext(serializedHTTPRequest, context)
+    this.originConnections[socketId] = {clientConnection, socket: ws, logContext}
   }
 
-  async onSocketMessage(
-    ws: BaseWebSocket,
-    serializedHTTPRequest: SerializedHTTPRequest,
-    detachableMsg: ArrayBuffer
-  ) {
+  async onSocketMessage(serializedHTTPRequest: SerializedHTTPRequest, detachableMsg: ArrayBuffer) {
     const message = new Uint8Array(detachableMsg.slice())
     const tmpMsg = new IncomingMessage(detachableMsg)
-    const documentName = readVarString(tmpMsg.decoder)
+    const documentNameAndSessionId = tmpMsg.readVarString()
+    // session-aware providers suffix the documentName with \0sessionId
+    const sepIdx = documentNameAndSessionId.indexOf('\0')
+    const documentName =
+      sepIdx === -1 ? documentNameAndSessionId : documentNameAndSessionId.slice(0, sepIdx)
     const isDocLoadedOnInstance = this.instance.documents.has(documentName)
+    const socketId = serializedHTTPRequest.headers['sec-websocket-key']
+    const entry = this.originConnections[socketId]
+    if (!entry) return
+    const {clientConnection, logContext} = entry
+    const handleMessage = () =>
+      runWithLogContext(logContext, () => clientConnection.handleMessage(message))
 
     if (isDocLoadedOnInstance) {
-      ws.emit('message', message)
+      handleMessage()
       return
     }
 
@@ -376,20 +474,21 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
         type: 'proxy'
       }
       const msg = this.pack(proxyMessage)
-      this.pub.publish(`${this.msgChannel}:${proxyTo}`, msg)
+      this.pub.publish(`${this.msgChannel}:${proxyTo}`, msg).catch(Logger.error)
       return
     }
     // This server owns the document, but hocuspocus hasn't loaded it yet
-    ws.emit('message', message)
+    handleMessage()
   }
 
   onSocketClose(socketId: string, code?: number, reason?: ArrayBuffer) {
-    const socket = this.originSockets[socketId]
-    if (!socket) return
-    // at this point the socket is considered GC'd and we cannot call close
-    // The origin socket did not set up any connections for the proxy, so none of the hooks will work if we just emit
-    socket?.emit('close', code, reason)
-    delete this.originSockets[socketId]
+    const entry = this.originConnections[socketId]
+    if (!entry) return
+    delete this.originConnections[socketId]
+    entry.clientConnection.handleClose({
+      code: code ?? 1000,
+      reason: reason ? Buffer.from(reason).toString() : ''
+    })
     const msg: RSAMessageCloseProxy = {type: 'closeProxy', socketId}
     this.pub.publish(this.msgChannel, this.pack(msg)).catch(() => {})
   }
@@ -407,13 +506,14 @@ export class RedisServerAffinity<TCE extends CustomEvents> implements Extension 
 
   async afterUnloadDocument(data: afterUnloadDocumentPayload) {
     const {documentName} = data
-    this.releaseLock(documentName)
+    this.releaseLock(documentName).catch(Logger.error)
     // Broadcast to cluster to immediately remove the cached redis value
     const msg: RSAMessageUnload = {type: 'unload', documentName}
-    this.pub.publish(this.msgChannel, this.pack(msg))
+    this.pub.publish(this.msgChannel, this.pack(msg)).catch(Logger.error)
   }
 
   async onDestroy() {
+    this.pendingReplies = {}
     this.pub.disconnect(false)
     this.sub.disconnect(false)
   }

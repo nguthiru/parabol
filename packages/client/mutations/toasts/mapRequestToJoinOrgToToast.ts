@@ -1,9 +1,9 @@
 import graphql from 'babel-plugin-relay/macro'
 import type {mapRequestToJoinOrgToToast_notification$data} from '../../__generated__/mapRequestToJoinOrgToToast_notification.graphql'
 import type {Snack} from '../../components/Snackbar'
-import type {OnNextHistoryContext} from '../../types/relayMutations'
-import SendClientSideEvent from '../../utils/SendClientSideEvent'
+import type {OnNextNavigateContext} from '../../types/relayMutations'
 import makeNotificationToastKey from './makeNotificationToastKey'
+import type {UnmaskedNotification} from './mapNotificationToToast'
 
 graphql`
   fragment mapRequestToJoinOrgToToast_notification on NotifyRequestToJoinOrg {
@@ -16,8 +16,8 @@ graphql`
 `
 
 const mapRequestToJoinOrgToToast = (
-  notification: mapRequestToJoinOrgToToast_notification$data,
-  {atmosphere, history}: OnNextHistoryContext
+  notification: UnmaskedNotification<mapRequestToJoinOrgToToast_notification$data>,
+  {navigate}: OnNextNavigateContext
 ): Snack => {
   const {id: notificationId, email, domainJoinRequestId} = notification
 
@@ -26,26 +26,18 @@ const mapRequestToJoinOrgToToast = (
     showDismissButton: true,
     key: makeNotificationToastKey(notificationId),
     message: `${email} is requesting to join your organization`,
-    onShow: () => {
-      SendClientSideEvent(atmosphere, 'Snackbar Viewed', {
-        snackbarType: 'requestToJoinOrg'
-      })
-    },
     action: {
       label: 'Review',
       callback: () => {
-        history.push(`/organization-join-request/${domainJoinRequestId}`, {
-          backgroundLocation: history.location
+        const {pathname, search, hash} = window.location
+        navigate(`/organization-join-request/${domainJoinRequestId}`, {
+          state: {backgroundLocation: {pathname, search, hash}}
         })
       }
     },
     secondaryAction: {
       label: 'Deny',
-      callback: () => {
-        SendClientSideEvent(atmosphere, 'Join Request Reviewed', {
-          action: 'deny'
-        })
-      }
+      callback: () => {}
     }
   }
 }

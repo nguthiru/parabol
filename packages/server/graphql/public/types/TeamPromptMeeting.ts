@@ -1,5 +1,4 @@
 import getKysely from '../../../postgres/getKysely'
-import {getTeamPromptResponsesByMeetingId} from '../../../postgres/queries/getTeamPromptResponsesByMeetingIds'
 import {selectNewMeetings} from '../../../postgres/select'
 import type {TeamPromptMeeting as TeamPromptMeetingSource} from '../../../postgres/types/Meeting'
 import {getUserId} from '../../../utils/authorization'
@@ -24,9 +23,8 @@ const TeamPromptMeeting: TeamPromptMeetingResolvers = {
       .where('createdAt', '<', createdAt)
       .orderBy('createdAt', 'desc')
       .limit(1)
-      .$narrowType<TeamPromptMeetingSource>()
       .executeTakeFirst()
-    return meeting || null
+    return (meeting as TeamPromptMeetingSource) || null
   },
   nextMeeting: async ({meetingSeriesId, createdAt}, _args, {dataLoader}) => {
     if (!meetingSeriesId) return null
@@ -41,9 +39,8 @@ const TeamPromptMeeting: TeamPromptMeetingResolvers = {
       .where('createdAt', '>', createdAt)
       .orderBy('createdAt', 'asc')
       .limit(1)
-      .$narrowType<TeamPromptMeetingSource>()
       .executeTakeFirst()
-    return meeting || null
+    return (meeting as TeamPromptMeetingSource) || null
   },
   tasks: async ({id: meetingId}, _args: unknown, {authToken, dataLoader}) => {
     const viewerId = getUserId(authToken)
@@ -53,18 +50,22 @@ const TeamPromptMeeting: TeamPromptMeetingResolvers = {
     return filterTasksByMeeting(teamTasks, meetingId, viewerId)
   },
 
-  settings: async ({teamId}, _args, {dataLoader}) => {
-    return await dataLoader.get('meetingSettingsByType').load({teamId, meetingType: 'teamPrompt'})
+  responses: ({id: meetingId}, _args, {authToken, dataLoader}) => {
+    const viewerId = getUserId(authToken)
+    return dataLoader.get('teamPromptResponsesByMeetingIdForViewer').load({meetingId, viewerId})
   },
 
-  responses: ({id: meetingId}, _args) => {
-    return getTeamPromptResponsesByMeetingId(meetingId)
+  template: ({templateId}, _args, {dataLoader}) => {
+    return dataLoader.get('meetingTemplates').loadNonNull(templateId)
   },
 
-  responseCount: async ({id: meetingId}) => {
-    return (await getTeamPromptResponsesByMeetingId(meetingId)).filter(
-      (response) => !!response.plaintextContent
-    ).length
+  prompts: ({id: meetingId}, _args, {dataLoader}) => {
+    return dataLoader.get('templatePromptsByMeetingId').load(meetingId)
+  },
+
+  responseCount: async ({id: meetingId}, _args, {dataLoader}) => {
+    const responses = await dataLoader.get('teamPromptResponsesByMeetingId').load(meetingId)
+    return new Set(responses.map(({userId}) => userId)).size
   },
 
   taskCount: async ({id: meetingId}, _args, {dataLoader}) => {

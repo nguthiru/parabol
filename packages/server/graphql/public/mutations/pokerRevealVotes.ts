@@ -1,0 +1,113 @@
+import {GraphQLError} from 'graphql'
+import {sql} from 'kysely'
+import ms from 'ms'
+import {PokerCards, SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {MAX_FREE_JIRA_EXPORTS} from 'parabol-client/utils/constants'
+// TODO: EstimateUserScore is from the deprecated /database directory
+import EstimateUserScore from '../../../database/types/EstimateUserScore'
+import getKysely from '../../../postgres/getKysely'
+import type {PokerMeetingMember} from '../../../postgres/types/Meeting'
+import getPhase from '../../../utils/getPhase'
+import {Logger} from '../../../utils/Logger'
+import publish from '../../../utils/publish'
+import {generatePokerAIEstimate} from '../../mutations/helpers/generatePokerAIEstimate'
+import type {MutationResolvers} from '../resolverTypes'
+
+const pokerRevealVotes: MutationResolvers['pokerRevealVotes'] = async (
+  _source,
+  {meetingId, stageId, ignoreSuggestedUpgrade},
+  {dataLoader, socketId: mutatorId}
+) => {
+  const pg = getKysely()
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+
+  // AUTH — fetch meetingMembers early to reduce race condition window
+  const [meetingMembers, meeting] = await Promise.all([
+    dataLoader.get('meetingMembersByMeetingId').load(meetingId),
+    dataLoader.get('newMeetings').load(meetingId)
+  ])
+
+  if (!meeting) {
+    throw new GraphQLError('Meeting not found', {extensions: {code: 'NOT_FOUND'}})
+  }
+  if (meeting.meetingType !== 'poker') {
+    throw new GraphQLError('Not a poker meeting', {extensions: {code: 'BAD_USER_INPUT'}})
+  }
+  const {endedAt, phases, teamId} = meeting
+  if (endedAt) {
+    throw new GraphQLError('Meeting has ended', {extensions: {code: 'CONFLICT'}})
+  }
+
+  // VALIDATION
+  const estimatePhase = getPhase(phases, 'ESTIMATE')
+  const estimatePhaseIdx = phases.indexOf(estimatePhase)
+  const {stages} = estimatePhase
+  const stageIdx = stages.findIndex((stage) => stage.id === stageId)
+  const stage = stages[stageIdx]
+  if (!stage) {
+    throw new GraphQLError('Invalid stageId provided', {extensions: {code: 'BAD_USER_INPUT'}})
+  }
+  const team = await dataLoader.get('teams').loadNonNull(teamId)
+  const org = await dataLoader.get('organizations').loadNonNull(team.orgId)
+  const {scores, serviceTaskId} = stage
+  if (org.tier === 'starter') {
+    const maybeCloudId = serviceTaskId.slice(0, serviceTaskId.indexOf(':'))
+    const pg = getKysely()
+    const jiraExport = await pg
+      .selectFrom('JiraExport')
+      .selectAll()
+      .where('cloudId', '=', maybeCloudId)
+      .executeTakeFirst()
+    if (jiraExport && jiraExport.exportCount >= MAX_FREE_JIRA_EXPORTS) {
+      const {limitReachedAt, exportCount} = jiraExport
+      const yesterday = new Date(Date.now() - ms('1d'))
+      const isHardError = limitReachedAt && limitReachedAt < yesterday
+      const code = isHardError ? 'UPGRADE_REQUIRED' : 'UPGRADE_SUGGESTED'
+      if (isHardError || !ignoreSuggestedUpgrade) {
+        throw new GraphQLError(
+          'Your free Jira export limit has been reached. Please upgrade to continue.',
+          {
+            extensions: {code, exportCount}
+          }
+        )
+      }
+    }
+  }
+  // RESOLUTION — add a pass card for everyone present but who didn't vote
+  meetingMembers.forEach((meetingMember) => {
+    const {userId, isSpectating} = meetingMember as PokerMeetingMember
+    if (isSpectating) return
+    const userScore = scores.find((score) => score.userId === userId)
+    if (!userScore) {
+      const passScore = new EstimateUserScore({
+        userId,
+        label: PokerCards.PASS_CARD as string
+      })
+      scores.push(passScore)
+    }
+  })
+
+  stage.isVoting = false
+  await pg
+    .updateTable('NewMeeting')
+    .set({
+      phases: sql`jsonb_set(
+        jsonb_set(phases, ${sql.lit(`{${estimatePhaseIdx},stages,${stageIdx},"scores"}`)}, ${JSON.stringify(scores)}::jsonb, false),
+        ${sql.lit(`{${estimatePhaseIdx},stages,${stageIdx},"isVoting"}`)}, 'false'::jsonb, false
+      )`
+    })
+    .where('id', '=', meetingId)
+    .execute()
+  dataLoader.clearAll('newMeetings')
+
+  // generate an AI estimate and publish it async once ready; the helper no-ops if an
+  // AI comment already exists for this discussion (e.g. votes revealed again after a reset)
+  generatePokerAIEstimate({stage, meetingId, teamId}).catch(Logger.error)
+
+  const data = {meetingId, stageId}
+  publish(SubscriptionChannel.MEETING, meetingId, 'PokerRevealVotesSuccess', data, subOptions)
+  return data
+}
+
+export default pokerRevealVotes

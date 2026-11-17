@@ -1,0 +1,49 @@
+import {GraphQLError} from 'graphql'
+import ms from 'ms'
+import {SubscriptionChannel} from 'parabol-client/types/constEnums'
+import {getUserId} from '../../../utils/authorization'
+import getRedis, {type RedisPipelineResponse} from '../../../utils/getRedis'
+import publish from '../../../utils/publish'
+import type {MutationResolvers} from '../resolverTypes'
+
+const editCommenting: MutationResolvers['editCommenting'] = async (
+  _source,
+  {isCommenting, discussionId},
+  {authToken, dataLoader, socketId: mutatorId}
+) => {
+  const viewerId = getUserId(authToken)
+  const operationId = dataLoader.share()
+  const subOptions = {mutatorId, operationId}
+
+  const discussion = await dataLoader.get('discussions').load(discussionId)
+  if (!discussion) {
+    throw new GraphQLError('Discussion not found', {extensions: {code: 'NOT_FOUND'}})
+  }
+  const {meetingId} = discussion
+
+  // RESOLUTION
+  const redis = getRedis()
+  const key = `commenting:${discussionId}`
+  if (isCommenting) {
+    const [numAddedRes] = (await redis
+      .multi()
+      .sadd(key, viewerId)
+      .pexpire(key, ms('5m'))
+      .exec()) as [RedisPipelineResponse<number>, RedisPipelineResponse<number>]
+    const numAdded = numAddedRes![1]
+    if (numAdded !== 1) {
+      throw new GraphQLError('Already commenting', {extensions: {code: 'CONFLICT'}})
+    }
+  } else {
+    const numRemoved = await redis.srem(key, viewerId)
+    if (numRemoved !== 1) {
+      throw new GraphQLError('Not commenting', {extensions: {code: 'CONFLICT'}})
+    }
+  }
+
+  const data = {discussionId}
+  publish(SubscriptionChannel.MEETING, meetingId, 'EditCommentingSuccess', data, subOptions)
+  return data
+}
+
+export default editCommenting

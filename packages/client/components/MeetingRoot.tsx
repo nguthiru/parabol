@@ -1,25 +1,23 @@
 import {Suspense, useEffect} from 'react'
-import meetingSelectorQuery, {
-  type MeetingSelectorQuery
-} from '../__generated__/MeetingSelectorQuery.graphql'
-import useQueryLoaderNow from '../hooks/useQueryLoaderNow'
-import useRouter from '../hooks/useRouter'
+import {useNavigate, useParams} from 'react-router'
+import useJoinedMeetingQuery from '../hooks/useJoinedMeetingQuery'
 import MeetingSelector from './MeetingSelector'
 
 const MeetingRoot = () => {
-  const {history, match} = useRouter<{meetingId: string}>()
-  const {params} = match
-  const {meetingId} = params
+  const navigate = useNavigate()
+  const {meetingId} = useParams()
   useEffect(() => {
     if (!meetingId) {
-      history.replace('/meetings')
+      navigate('/meetings', {replace: true})
     }
   }, [])
-  const queryRef = useQueryLoaderNow<MeetingSelectorQuery>(meetingSelectorQuery, {meetingId})
+  const queryRef = useJoinedMeetingQuery(meetingId)
   if (!meetingId) return null
   return (
     <Suspense fallback={''}>
-      {queryRef && <MeetingSelector meetingId={meetingId} queryRef={queryRef} />}
+      {queryRef?.variables.meetingId === meetingId && (
+        <MeetingSelector meetingId={meetingId} queryRef={queryRef} />
+      )}
     </Suspense>
   )
 }

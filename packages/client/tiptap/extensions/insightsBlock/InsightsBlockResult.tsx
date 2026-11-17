@@ -1,31 +1,31 @@
-import ContentCopyIcon from '@mui/icons-material/ContentCopy'
-import EditIcon from '@mui/icons-material/Edit'
 import {Fragment} from '@tiptap/pm/model'
-import {getHTMLFromFragment, NodeViewContent, type NodeViewProps} from '@tiptap/react'
+import {Editor, getHTMLFromFragment, NodeViewContent, type NodeViewProps} from '@tiptap/react'
+import {serverTipTapExtensions} from '~/shared/tiptap/serverTipTapExtensions'
+import {ContentCopy as ContentCopyIcon, Edit as EditIcon} from '~/ui/icons'
 import {Tooltip} from '../../../ui/Tooltip/Tooltip'
 import {TooltipContent} from '../../../ui/Tooltip/TooltipContent'
 import {TooltipTrigger} from '../../../ui/Tooltip/TooltipTrigger'
-import type {InsightsBlockAttrs} from './InsightsBlock'
-
 export const InsightsBlockResult = (props: NodeViewProps) => {
   const {editor, node, updateAttributes} = props
-  const attrs = node.attrs as InsightsBlockAttrs
-  const {id} = attrs
   return (
     <>
       <div className='flex justify-end space-x-2'>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              className='cursor-pointer text-slate-600 hover:text-slate-700'
+              className='cursor-pointer text-fg-secondary hover:text-fg-primary'
               onClick={async () => {
-                const nodePos = editor.$node('insightsBlock', {id})!
-                // Leaving the comment here in case we want to switch back to plain text
-                // const plainText = editor.state.doc.textBetween(nodePos.from, nodePos.to, '\n')
-                // Important: get HTML from schema so we get attributes
-                const fragment = Fragment.from(nodePos.node)
-                const htmlText = getHTMLFromFragment(fragment, editor.schema)
-                const markdownText = editor.storage.markdown.serializer.serialize(nodePos.node)
+                const htmlFragment = Fragment.from(node)
+                const htmlText = getHTMLFromFragment(htmlFragment, editor.schema)
+
+                const innerFragment = node.content
+                const innerText = getHTMLFromFragment(innerFragment, editor.schema)
+                const tmpEditor = new Editor({
+                  contentType: 'html',
+                  content: innerText,
+                  extensions: serverTipTapExtensions
+                })
+                const markdownText = tmpEditor.getMarkdown()
                 await navigator.clipboard.write([
                   new ClipboardItem({
                     'text/plain': new Blob([markdownText], {
@@ -46,7 +46,7 @@ export const InsightsBlockResult = (props: NodeViewProps) => {
         <Tooltip>
           <TooltipTrigger asChild>
             <button
-              className='cursor-pointer text-slate-600 hover:text-slate-700'
+              className='cursor-pointer text-fg-secondary hover:text-fg-primary'
               onClick={() => {
                 updateAttributes({editing: true})
               }}

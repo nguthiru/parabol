@@ -1,48 +1,40 @@
-import styled from '@emotion/styled'
+import {useRef} from 'react'
+import {Navigate, useNavigate} from 'react-router'
 import useCanonical from '~/hooks/useCanonical'
 import useAtmosphere from '../hooks/useAtmosphere'
-import useRouter from '../hooks/useRouter'
 import getValidRedirectParam from '../utils/getValidRedirectParam'
-import {AUTH_DIALOG_WIDTH} from './AuthenticationDialog'
 import GenericAuthentication, {type AuthPageSlug, type GotoAuthPage} from './GenericAuthentication'
 import TeamInvitationWrapper from './TeamInvitationWrapper'
-
-const CopyBlock = styled('div')({
-  marginBottom: 48,
-  width: 'calc(100vw - 16px)',
-  // must be no wider than the auth popup width to keep it looking clean
-  maxWidth: AUTH_DIALOG_WIDTH,
-  textAlign: 'center'
-})
 
 interface Props {
   page: AuthPageSlug
 }
 
 const AuthenticationPage = (props: Props) => {
-  const {history} = useRouter()
+  const navigate = useNavigate()
   const {page} = props
   const {authObj} = useAtmosphere()
+  // if they sign in here, the login mutation redirects them, so following the auth cookie would navigate twice
+  const isInitiallySignedInRef = useRef(!!authObj)
   useCanonical(page)
-  if (authObj) {
+  if (isInitiallySignedInRef.current) {
     const nextUrl = getValidRedirectParam() || '/meetings'
     // always replace otherwise they could get stuck in a back-button loop
-    setTimeout(() => history.replace(nextUrl))
-    return null
+    return <Navigate to={nextUrl} replace />
   }
   const goToPage: GotoAuthPage = (page, search?) => {
     const url = search ? `/${page}${search}` : `/${page}`
-    history.push(url)
+    navigate(url)
   }
   return (
     <TeamInvitationWrapper>
-      <CopyBlock>
+      <div className='mb-12 w-[calc(100vw-16px)] max-w-[356px] text-center'>
         <h1>
           Better Meetings, <br />
           Less Effort
         </h1>
         <p>92&#37; of users agreed that Parabol improves the efficiency of their meetings.</p>
-      </CopyBlock>
+      </div>
       <GenericAuthentication page={page} goToPage={goToPage} />
     </TeamInvitationWrapper>
   )

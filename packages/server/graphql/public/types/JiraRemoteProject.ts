@@ -1,32 +1,26 @@
-import JiraProjectId from 'parabol-client/shared/gqlIds/JiraProjectId'
-import AtlassianServerManager, {type JiraProject} from '../../../utils/AtlassianServerManager'
-import {
-  createImageUrlHash,
-  createParabolImageUrl,
-  downloadAndCacheImage
-} from '../../../utils/atlassian/jiraImages'
+import JiraProjectId from 'parabol-client/integrations/jira/shared/JiraProjectId'
+import IntegrationRepoId from 'parabol-client/shared/gqlIds/IntegrationRepoId'
+import makeAppURL from 'parabol-client/utils/makeAppURL'
+import appOrigin from '../../../appOrigin'
+import type {JiraGQLProject} from '../../../integrations/jira/fetchJiraProjects'
 import type {JiraRemoteProjectResolvers} from '../resolverTypes'
 
-export type JiraRemoteProjectSource = JiraProject & {
-  service: 'jira'
-  cloudId: string
-  teamId: string
-  userId: string
-}
+export type JiraRemoteProjectSource = JiraGQLProject
 
 const JiraRemoteProject: JiraRemoteProjectResolvers = {
   __isTypeOf: ({service}) => service === 'jira',
   id: ({cloudId, key}) => JiraProjectId.join(cloudId, key),
   service: () => 'jira',
-  avatar: async ({avatarUrls, teamId, userId}, _args: unknown, {dataLoader}) => {
+  integrationRepoId: ({cloudId, key}) => IntegrationRepoId.join({service: 'jira', cloudId, key}),
+  avatar: ({avatarUrls, cloudId, teamId}) => {
     const url = avatarUrls['48x48']
-    const auth = await dataLoader.get('freshAtlassianAuth').load({teamId, userId})
-    if (!auth) return null
-    const {accessToken} = auth
-    const manager = new AtlassianServerManager(accessToken)
-    const avatarUrlHash = createImageUrlHash(url)
-    await downloadAndCacheImage(manager, avatarUrlHash, url)
-    return createParabolImageUrl(avatarUrlHash)
+    if (!url) return null
+    // Rewrite direct instance URLs to the API gateway so the Bearer token is accepted
+    const apiUrl = url.replace(
+      /^https:\/\/[^.]+\.atlassian\.net\/(rest\/)/,
+      `https://api.atlassian.com/ex/jira/${cloudId}/$1`
+    )
+    return makeAppURL(appOrigin, `/assets/Team/${teamId}/atlassian/${encodeURIComponent(apiUrl)}`)
   }
 }
 

@@ -1,40 +1,24 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import type * as React from 'react'
-import {type ReactNode, useState} from 'react'
+import {type ReactNode, useContext, useEffect, useState} from 'react'
 import {useFragment} from 'react-relay'
 import type {EditingStatus_task$key} from '~/__generated__/EditingStatus_task.graphql'
-import {MenuPosition} from '~/hooks/useCoords'
-import useTooltip from '~/hooks/useTooltip'
+import {Tooltip} from '~/ui/Tooltip/Tooltip'
+import {TooltipContent} from '~/ui/Tooltip/TooltipContent'
+import {TooltipTrigger} from '~/ui/Tooltip/TooltipTrigger'
 import useAtmosphere from '../../hooks/useAtmosphere'
 import type {UseTaskChild} from '../../hooks/useTaskChildFocus'
-import {PALETTE} from '../../styles/paletteV3'
-import {Card} from '../../types/constEnums'
+import {cn} from '../../ui/cn'
+import {DONE} from '../../utils/constants'
+import getLongOpenMonths from '../../utils/getLongOpenMonths'
+import isNewSince from '../../utils/isNewSince'
 import DueDateToggle from '../DueDateToggle'
+import LastRetroEndedAtContext from '../LastRetroEndedAtContext'
+import CreatedInLink from './CreatedInLink'
 import EditingStatusText from './EditingStatusText'
+import nextMetaField, {type TaskMetaField} from './nextMetaField'
 
-const StatusHeader = styled('div')({
-  alignItems: 'flex-start',
-  color: PALETTE.SLATE_600,
-  display: 'flex',
-  fontSize: 11,
-  fontWeight: 400,
-  justifyContent: 'space-between',
-  lineHeight: '20px',
-  minHeight: Card.BUTTON_HEIGHT,
-  padding: `0 ${Card.PADDING} 4px`,
-  textAlign: 'left'
-})
-
-const EditingTextWrapper = styled('div')({
-  width: '100%'
-})
-
-const EditingText = styled('span')<{isEditing: boolean}>(({isEditing}) => ({
-  cursor: isEditing ? 'default' : 'pointer'
-}))
-
-export type TimestampType = 'createdAt' | 'updatedAt'
+export type {TaskMetaField}
 
 interface Props {
   children: ReactNode
@@ -42,15 +26,42 @@ interface Props {
   task: EditingStatus_task$key
   useTaskChild: UseTaskChild
   isArchived?: boolean
+  defaultMetaField?: TaskMetaField
+  openTopicInNewTab?: boolean
 }
 
 const EditingStatus = (props: Props) => {
-  const {children, isTaskHovered, task: taskRef, useTaskChild, isArchived} = props
+  const {
+    children,
+    isTaskHovered,
+    task: taskRef,
+    useTaskChild,
+    isArchived,
+    defaultMetaField,
+    openTopicInNewTab
+  } = props
   const task = useFragment(
     graphql`
       fragment EditingStatus_task on Task {
         createdAt
         updatedAt
+        status
+        meetingId
+        meeting {
+          id
+          name
+        }
+        discussion {
+          stage {
+            ... on RetroDiscussStage {
+              stageIdx
+              reflectionGroup {
+                id
+                title
+              }
+            }
+          }
+        }
         editors {
           userId
           preferredName
@@ -60,54 +71,93 @@ const EditingStatus = (props: Props) => {
     `,
     taskRef
   )
-  const {createdAt, updatedAt, editors} = task
+  const {createdAt, updatedAt, status, meetingId, meeting, discussion, editors} = task
+  const reflectionGroup = discussion?.stage?.reflectionGroup
+  const topicTitle = reflectionGroup?.title ?? 'Untitled topic'
+  const stageIdx = discussion?.stage?.stageIdx
+  const hasRetro = !!(meetingId && meeting && reflectionGroup && stageIdx !== undefined)
   const atmosphere = useAtmosphere()
+  const lastRetroEndedAt = useContext(LastRetroEndedAtContext)
   const {viewerId} = atmosphere
   const otherEditors = editors.filter((editor) => editor.userId !== viewerId)
   const isEditing = editors.length > otherEditors.length
-  const [timestampType, setTimestampType] = useState<TimestampType>('createdAt')
-  const toggleTimestamp = (e: React.MouseEvent) => {
+
+  const initialField: TaskMetaField =
+    defaultMetaField === 'createdIn' && hasRetro ? 'createdIn' : 'createdAt'
+  const [metaField, setMetaField] = useState<TaskMetaField>(initialField)
+
+  useEffect(() => {
+    if (!hasRetro && metaField === 'createdIn') {
+      setMetaField('createdAt')
+    }
+  }, [hasRetro, metaField])
+
+  const toggleMetaField = (e: React.MouseEvent) => {
     e.preventDefault()
-    closeTooltip()
-    setTimestampType(timestampType === 'createdAt' ? 'updatedAt' : 'createdAt')
+    setMetaField(nextMetaField(metaField, hasRetro))
   }
-  const {
-    tooltipPortal,
-    openTooltip,
-    closeTooltip,
-    originRef: tipRef
-  } = useTooltip<HTMLDivElement>(MenuPosition.UPPER_CENTER, {
-    disabled: isEditing
-  })
-  const timestamp = timestampType === 'createdAt' ? createdAt : updatedAt
+
+  const effectiveField: 'createdAt' | 'updatedAt' =
+    metaField === 'createdIn' ? 'createdAt' : metaField
+  const isOpen = status !== DONE && !isArchived
+  const isNew = isOpen && isNewSince(createdAt, lastRetroEndedAt)
+  const longOpenMonths =
+    !isNew && isOpen && defaultMetaField === 'createdIn' && metaField === 'createdIn' && hasRetro
+      ? getLongOpenMonths(createdAt)
+      : null
+
   return (
-    <StatusHeader>
-      <EditingTextWrapper>
+    <div className='flex min-h-[20px] items-start justify-between pr-2 pb-1 pl-4 text-left font-semibold text-fg-secondary text-xs leading-5'>
+      <div className='w-full'>
         {children}
-        <EditingText
-          isEditing={isEditing}
-          onClick={toggleTimestamp}
-          onMouseEnter={openTooltip}
-          onMouseLeave={closeTooltip}
-          ref={tipRef}
-        >
-          <EditingStatusText
-            editors={otherEditors}
-            isArchived={isArchived}
-            isEditing={isEditing}
-            timestamp={timestamp}
-            timestampType={timestampType}
+        {isNew && (
+          <span className='mr-1.5 rounded bg-surface-well px-1 py-px text-fg-primary'>New</span>
+        )}
+        {longOpenMonths !== null && (
+          <span className='mr-1.5 rounded bg-surface-well px-1 py-px text-fg-primary'>
+            Open {longOpenMonths} months
+          </span>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              className={cn(isEditing ? 'cursor-default' : 'cursor-pointer')}
+              onClick={toggleMetaField}
+            >
+              {metaField === 'createdIn' && hasRetro ? (
+                <span>{topicTitle}</span>
+              ) : (
+                <EditingStatusText
+                  editors={otherEditors}
+                  isArchived={isArchived}
+                  isEditing={isEditing}
+                  timestamp={effectiveField === 'createdAt' ? createdAt : updatedAt}
+                  timestampType={effectiveField}
+                />
+              )}
+            </span>
+          </TooltipTrigger>
+          {!isEditing && <TooltipContent side='bottom'>Toggle View</TooltipContent>}
+        </Tooltip>
+        {metaField === 'createdIn' && hasRetro && (
+          <CreatedInLink
+            meetingId={meetingId}
+            meetingName={meeting.name}
+            topicTitle={topicTitle}
+            stageIdx={stageIdx}
+            openInNewTab={!!openTopicInNewTab}
           />
-        </EditingText>
-        {tooltipPortal(<div>{'Toggle Timestamp'}</div>)}
-      </EditingTextWrapper>
-      <DueDateToggle
-        cardIsActive={isEditing || isTaskHovered}
-        isArchived={isArchived}
-        task={task}
-        useTaskChild={useTaskChild}
-      />
-    </StatusHeader>
+        )}
+      </div>
+      <div className='-mt-2 shrink-0'>
+        <DueDateToggle
+          cardIsActive={isEditing || isTaskHovered}
+          isArchived={isArchived}
+          task={task}
+          useTaskChild={useTaskChild}
+        />
+      </div>
+    </div>
   )
 }
 

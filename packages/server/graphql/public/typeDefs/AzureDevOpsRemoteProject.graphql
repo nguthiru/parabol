@@ -1,29 +1,41 @@
 """
-A project fetched from Azure DevOps in real time
+An Azure DevOps project, the container of work items. Projects live in an organization (dev.azure.com/{organization})
 """
 type AzureDevOpsRemoteProject implements RepoIntegration {
+  """
+  The project's id in Azure DevOps
+  """
   id: ID!
+
   service: IntegrationProviderServiceEnum!
 
   """
-  The parabol teamId this issue was fetched for
+  The parabol teamId this project was fetched for
   """
   teamId: ID!
 
   """
-  The parabol userId this issue was fetched for
+  The parabol userId this project was fetched for
   """
   userId: ID!
-  lastUpdateTime: DateTime!
-  self: ID!
 
   """
-  The instance ID that the project lives on
+  The organization the project lives in, as its host and path, e.g. dev.azure.com/myorg
   """
   instanceId: ID!
+
+  """
+  The name of the organization the project lives in, e.g. myorg
+  """
+  organization: String!
+
+  """
+  The name of the project
+  """
   name: String!
-  revision: Int!
-  state: String!
-  url: String!
-  visibility: String!
+
+  """
+  What createTaskIntegration and updateIntegrationRepoAccess take for this project: instanceId:projectId
+  """
+  integrationRepoId: ID!
 }

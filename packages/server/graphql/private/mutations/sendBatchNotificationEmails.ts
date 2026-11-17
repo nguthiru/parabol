@@ -36,17 +36,17 @@ const sendBatchNotificationEmails: MutationResolvers['sendBatchNotificationEmail
     userNotificationCount.map((value) => [value.userId, Number(value.notificationCount)])
   )
   const {dataLoader} = context
-  const users = (await dataLoader.get('users').loadMany([...userNotificationMap.keys()])).filter(
-    isValid
-  )
+  const users = (await dataLoader.get('users').loadMany([...userNotificationMap.keys()]))
+    .filter(isValid)
+    .filter((user) => !user.isRemoved)
 
   // :TODO: (jmtaber129): Filter out users whose only notification is a team invitation
 
   await Promise.all(
     users.map(async (user) => {
-      const {email, tms, preferredName} = user
+      const {email, preferredName} = user
       const notificationCount = userNotificationMap.get(user.id)!
-
+      const tms = await dataLoader.get('teamIdsByUserId').load(user.id)
       const authToken = new AuthToken({
         sub: user.id,
         tms,
@@ -59,7 +59,8 @@ const sendBatchNotificationEmails: MutationResolvers['sendBatchNotificationEmail
         appOrigin,
         environment
       })
-      return getMailManager().sendEmail({
+      const mailManager = await getMailManager()
+      return mailManager.sendEmail({
         to: email,
         subject,
         body,

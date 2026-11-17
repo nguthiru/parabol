@@ -1,4 +1,0 @@
-type ReflectTemplatePromptUpdateGroupColorPayload {
-  error: StandardMutationError
-  prompt: ReflectPrompt
-}

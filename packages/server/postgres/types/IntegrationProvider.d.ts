@@ -52,6 +52,9 @@ export type IntegrationProviderMattermost =
 export interface IntegrationProviderGcalOAuth2 extends IntegrationProviderOAuth2 {
   service: 'gcal'
 }
+export interface IntegrationProviderGmeetOAuth2 extends IntegrationProviderOAuth2 {
+  service: 'gmeet'
+}
 export interface IntegrationProviderGitLabOAuth2 extends IntegrationProviderOAuth2 {
   service: 'gitlab'
 }
@@ -75,6 +78,22 @@ export interface IntegrationProviderAzureDevOps extends IntegrationProviderOAuth
   tenantId: string
 }
 
+export interface IntegrationProviderZoomOAuth2 extends IntegrationProviderOAuth2 {
+  service: 'zoom'
+}
+
+export interface IntegrationProviderJiraOAuth2 extends IntegrationProviderOAuth2 {
+  service: 'jira'
+}
+
+export interface IntegrationProviderGitHubOAuth2 extends IntegrationProviderOAuth2 {
+  service: 'github'
+}
+
+export interface IntegrationProviderClickUpOAuth2 extends IntegrationProviderOAuth2 {
+  service: 'clickup'
+}
+
 export type TIntegrationProvider =
   | IntegrationProviderMattermost
   | IntegrationProviderGitLabOAuth2
@@ -83,4 +102,9 @@ export type TIntegrationProvider =
   | IntegrationProviderAzureDevOps
   | IntegrationProviderMSTeams
   | IntegrationProviderGcalOAuth2
+  | IntegrationProviderGmeetOAuth2
   | IntegrationProviderLinear
+  | IntegrationProviderZoomOAuth2
+  | IntegrationProviderJiraOAuth2
+  | IntegrationProviderGitHubOAuth2
+  | IntegrationProviderClickUpOAuth2

@@ -1,8 +1,10 @@
 directive @stream_HACK on FIELD
+directive @stream(if: Boolean! = true, label: String, initialCount: Int = 0) on FIELD
+directive @defer on FRAGMENT_SPREAD
 """
 The user account profile
 """
-type User implements UserPartial {
+type User {
   """
   The userId provided by us
   """
@@ -24,7 +26,7 @@ type User implements UserPartial {
     The unique team ID
     """
     teamId: ID!
-  ): TaskConnection
+  ): TaskConnection @scope(name: TASKS_READ)
   archivedTasksCount(
     """
     The unique team ID
@@ -49,6 +51,11 @@ type User implements UserPartial {
   identities: [AuthIdentity]
 
   """
+  The SAML identity provider sign-on URL for the user's email domain, if configured
+  """
+  samlIdP: String
+
+  """
   true if the user is not currently being billed for service. removed on every websocket handshake
   """
   inactive: Boolean
@@ -64,7 +71,7 @@ type User implements UserPartial {
     The id of the organization
     """
     orgId: ID!
-  ): InvoiceConnection!
+  ): InvoiceConnection! @scope(name: ORGS_READ)
 
   """
   true if the user is a billing leader on any organization, else false
@@ -150,7 +157,7 @@ type User implements UserPartial {
     true to only return archived timeline events; false to return active ones
     """
     archived: Boolean = false
-  ): TimelineEventConnection!
+  ): TimelineEventConnection! @scope(name: MEETINGS_READ)
 
   """
   the comments and tasks created from the discussion
@@ -160,7 +167,7 @@ type User implements UserPartial {
     The ID of the discussion
     """
     id: ID!
-  ): Discussion
+  ): Discussion @scope(name: COMMENTS_READ)
 
   """
   the ID of the newest feature, null if the user has dismissed it
@@ -178,14 +185,10 @@ type User implements UserPartial {
   preferredName: String!
 
   """
-  The last day the user connected via websocket or navigated to a common area
+  The last day the user connected via websocket or navigated to a common area. Null unless the viewer is the
+  user or shares an organization with them, like inactive and isConnected
   """
-  lastSeenAt: DateTime!
-
-  """
-  The paths that the user is currently visiting. This is null if the user is not currently online. A URL can also be null if the socket is not in a meeting, e.g. on the timeline.
-  """
-  lastSeenAtURLs: [String]
+  lastSeenAt: DateTime
 
   """
   The meeting member associated with this user, if a meeting is currently in progress
@@ -195,7 +198,7 @@ type User implements UserPartial {
     The specific meeting ID
     """
     meetingId: ID!
-  ): MeetingMember
+  ): MeetingMember @scope(name: MEETINGS_READ)
 
   """
   A previous meeting that the user was in (present or absent)
@@ -205,7 +208,19 @@ type User implements UserPartial {
     The meeting ID
     """
     meetingId: ID!
-  ): NewMeeting
+  ): NewMeeting @scope(name: MEETINGS_READ)
+
+  """
+  A meeting series the viewer can access. Used to manage scheduled-only series
+  (where no meeting has spawned yet) and to deep-link to series-level configuration.
+  Returns null when the series does not exist or the viewer is not on the team.
+  """
+  meetingSeries(
+    """
+    The meeting series ID
+    """
+    meetingSeriesId: ID!
+  ): MeetingSeries @scope(name: MEETINGS_READ)
 
   """
   all the notifications for a single user
@@ -220,7 +235,7 @@ type User implements UserPartial {
     the orgId
     """
     orgId: ID!
-  ): Organization
+  ): Organization @scope(name: ORGS_READ)
 
   """
   The connection between a user and an organization
@@ -230,17 +245,17 @@ type User implements UserPartial {
     the orgId
     """
     orgId: ID!
-  ): OrganizationUser
+  ): OrganizationUser @scope(name: ORGS_READ)
 
   """
   A single user that is connected to a single organization
   """
-  organizationUsers: [OrganizationUser!]!
+  organizationUsers: [OrganizationUser!]! @scope(name: ORGS_READ)
 
   """
   Get the list of all organizations a user belongs to
   """
-  organizations: [Organization!]!
+  organizations: [Organization!]! @scope(name: ORGS_READ)
 
   """
   a string with message stating that the user is over the free tier limit, else null
@@ -258,6 +273,11 @@ type User implements UserPartial {
   sendPageInvitationEmail: Boolean!
 
   """
+  The user's preferred UI appearance (light, dark, or follow the OS)
+  """
+  theme: UserThemeEnum!
+
+  """
   The reflection groups that are similar to the selected reflection in the Spotlight
   """
   similarReflectionGroups(
@@ -270,7 +290,7 @@ type User implements UserPartial {
     Only return reflection groups that match the search query
     """
     searchQuery: String!
-  ): [RetroReflectionGroup!]!
+  ): [RetroReflectionGroup!]! @scope(name: MEETINGS_READ)
   tasks(
     """
     the number of tasks to return
@@ -311,7 +331,7 @@ type User implements UserPartial {
     if true, include unassigned tasks. If false, only return assigned tasks
     """
     includeUnassigned: Boolean = false
-  ): TaskConnection!
+  ): TaskConnection! @scope(name: TASKS_READ)
 
   """
   A query for a team
@@ -321,7 +341,7 @@ type User implements UserPartial {
     The team ID for the desired team
     """
     teamId: ID!
-  ): Team
+  ): Team @scope(name: TEAMS_READ)
 
   """
   The invitation sent to the user, even if it was sent before they were a user
@@ -336,7 +356,7 @@ type User implements UserPartial {
     The teamId to check for the invitation
     """
     teamId: ID
-  ): TeamInvitationPayload!
+  ): TeamInvitationPayload! @scope(name: TEAMS_READ)
 
   """
   all the teams the user is on that the viewer can see.
@@ -346,7 +366,7 @@ type User implements UserPartial {
     If true, returns archived teams as well; otherwise only return active teams. Default to false.
     """
     includeArchived: Boolean = false
-  ): [Team!]!
+  ): [Team!]! @scope(name: TEAMS_READ)
 
   """
   The team member associated with this user
@@ -361,43 +381,37 @@ type User implements UserPartial {
     If null, defaults to the team member for this user. Else, will grab the team member. Returns null if not on team.
     """
     userId: ID
-  ): TeamMember
+  ): TeamMember @scope(name: TEAMS_READ)
 
   """
-  all the teams the user is a part of that the viewer can see
+  IDs of all teams the user is a part of that the viewer can see
   """
-  tms: [ID!]!
+  tms: [ID!]! @scope(name: TEAMS_READ)
 
   """
   The timestamp the user was last updated
   """
   updatedAt: DateTime
-  userOnTeam(
-    """
-    The other user
-    """
-    userId: ID!
-  ): User
 
   """
-  The assumed company this organizaiton belongs to
+  The assumed company this organization belongs to
   """
-  company: Company
+  company: Company @scope(name: ORGS_READ)
 
   """
   The domains the user is a lead of
   """
-  domains: [Company!]!
+  domains: [Company!]! @scope(name: ORGS_READ)
 
   """
   Domain join request
   """
-  domainJoinRequest(requestId: ID!): DomainJoinRequest
+  domainJoinRequest(requestId: ID!): DomainJoinRequest @scope(name: ORGS_READ)
 
   """
   The user's favorite meeting templates
   """
-  favoriteTemplates: [MeetingTemplate!]!
+  favoriteTemplates: [MeetingTemplate!]! @scope(name: TEMPLATES_READ)
 
   """
   Whether the user has a feature flag enabled or not
@@ -405,12 +419,12 @@ type User implements UserPartial {
   featureFlag(featureName: String!): Boolean!
 
   """
-  url of user’s profile picture
+  url of user's profile picture
   """
   picture: URL!
 
   """
-  url of user’s raster profile picture (if user profile pic is an SVG, raster will be a PNG)
+  url of user's raster profile picture (if user profile pic is an SVG, raster will be a PNG)
   """
   rasterPicture: URL!
 
@@ -449,7 +463,7 @@ type User implements UserPartial {
     An optional argument to filter by template type
     """
     type: MeetingTypeEnum
-  ): MeetingTemplateConnection!
+  ): MeetingTemplateConnection! @scope(name: TEMPLATES_READ)
 
   """
   Activities available to the user matching the search
@@ -459,7 +473,7 @@ type User implements UserPartial {
     Search query
     """
     search: String!
-  ): [MeetingTemplate!]!
+  ): [MeetingTemplate!]! @scope(name: TEMPLATES_READ)
 
   """
   A prototype for a team experience. Includes meeting templates and meeting types that have no templates
@@ -469,22 +483,7 @@ type User implements UserPartial {
     The ID of the activity. templateId or standup or checkin
     """
     activityId: ID!
-  ): MeetingTemplate
-
-  """
-  A query to parse/validate SAML metadata for a given domain
-  """
-  parseSAMLMetadata(
-    """
-    URL of a blob of XML from the IdP describing how to handle authentication
-    """
-    metadataURL: String!
-
-    """
-    The name of the company, used as a slug in signon URLs
-    """
-    domain: String!
-  ): ParseSAMLMetadataPayload!
+  ): MeetingTemplate @scope(name: TEMPLATES_READ)
 
   """
   The number of free custom retro templates remaining
@@ -495,6 +494,12 @@ type User implements UserPartial {
   The number of free custom poker templates remaining
   """
   freeCustomPokerTemplatesRemaining: Int!
+
+  """
+  The number of free custom stand-up templates remaining
+  """
+  freeCustomStandupTemplatesRemaining: Int!
+
   """
   AI-provided Insights
   """
@@ -508,12 +513,15 @@ type User implements UserPartial {
   Prompts to send to an AI endpoint, e.g. pageInsights. Limited to 20 user-defined prompts + n shared
   """
   aiPrompts: [AIPrompt!]!
+  "Paginated list of meetings for the given teams and types"
   meetings(
     """
     The max number of meetings to return
     """
     first: Int!
+    "Filter to meetings belonging to these teams"
     teamIds: [ID!]!
+    "Filter to these meeting types"
     meetingTypes: [MeetingTypeEnum!]!
     """
     The createdAt DateTime used as a cursor
@@ -523,7 +531,7 @@ type User implements UserPartial {
     The createdAt DateTime used as an end cursor
     """
     before: DateTime!
-  ): MeetingConnection!
+  ): MeetingConnection! @scope(name: MEETINGS_READ)
   """
   All the pages accessible by a user
   """
@@ -553,5 +561,25 @@ type User implements UserPartial {
     A string of text to filter the results. If an empty string is provided, it returns top suggestions
     """
     textFilter: String
-  ): PageConnection!
+  ): PageConnection! @scope(name: PAGES_READ)
+  search(
+    "The string to search for"
+    query: String!
+    first: Int!
+    "The pageInfo.endCursor of a previous request with the same query, type, filters and alpha"
+    after: String
+    type: SearchTypeEnum!
+    teamIds: [ID!]
+    startAt: DateTime
+    endAt: DateTime
+    dateField: SearchDateTypeEnum
+    "Alpha controls the weight given to vector (semantic) search vs. keyword search. 1.0 = pure vector, 0.0 = pure keyword. Defaults to 0.01 for pages and 0.25 otherwise."
+    alpha: Float
+  ): SearchResultConnection!
+  "The user's personal access tokens for API access"
+  personalAccessTokens: [PersonalAccessToken!]!
+  """
+  The OAuth 2.0 application behind an authorization request, or null if the request is invalid
+  """
+  oauthAuthorizationRequest(request: OAuthAuthorizationRequestInput!): OAuthAuthorizationRequest
 }

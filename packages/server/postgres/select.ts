@@ -1,11 +1,13 @@
 import type {JSONContent} from '@tiptap/core'
 import type {ControlledTransaction, Kysely, QueryCreator} from 'kysely'
 import {type NotNull, type SelectQueryBuilder, sql} from 'kysely'
-import type {NewMeetingPhaseTypeEnum} from '../graphql/public/resolverTypes'
+import type {AnyTaskIntegration} from '../../client/shared/types/TaskIntegration'
+import type {DegradedItem, PageExportPageState} from '../utils/confluence/types'
 import getKysely from './getKysely'
 import type {
-  GitHubSearchQuery,
-  JiraDimensionField,
+  AutogroupReflectionGroupType,
+  IntegrationAuthMetaByService,
+  IntegrationSearchQueryJsonByService,
   JiraSearchQuery,
   ReactjiDB,
   TaskTag,
@@ -14,20 +16,25 @@ import type {
 import type {TIntegrationProvider} from './types/IntegrationProvider'
 import type {AnyMeeting, AnyMeetingMember} from './types/Meeting'
 import type {AnyNotification} from './types/Notification'
-import type {DB} from './types/pg'
-import type {AnyTaskIntegration} from './types/TaskIntegration'
+import type {DB, Integrationproviderserviceenum, Newmeetingphasetypeenum} from './types/pg'
 
 // This type is to allow us to perform a selectAll & then overwrite any column with another type
 // e.g. a column might be of type string[] but when calling to_json it will be {id: string}[]
 // since string[] && {id: string}[] do not intersect, we can't do this natively within kysely with $assertType
 type AssertedQuery<Q, K> = Q extends SelectQueryBuilder<infer T1, infer T2, infer X>
-  ? SelectQueryBuilder<T1, T2, Omit<X, keyof K> & K>
+  ? // extending unknown (or any) distributes K to each member of X because extending must evaluate the statement each time
+    SelectQueryBuilder<T1, T2, X extends unknown ? K & Omit<X, keyof K> : X>
   : never
 
 export const selectTimelineEvent = () => {
   return getKysely().selectFrom('TimelineEvent').selectAll().$narrowType<
     | {
-        type: 'actionComplete' | 'POKER_COMPLETE' | 'TEAM_PROMPT_COMPLETE' | 'retroComplete'
+        type:
+          | 'actionComplete'
+          | 'POKER_COMPLETE'
+          | 'TEAM_PROMPT_COMPLETE'
+          | 'TEAM_HEALTH_COMPLETE'
+          | 'retroComplete'
         teamId: NotNull
         orgId: NotNull
         meetingId: NotNull
@@ -40,8 +47,58 @@ export const selectDiscussion = () => {
   return getKysely().selectFrom('Discussion').selectAll()
 }
 
+type TeamMemberIntegrationAuthByService = {
+  [S in Integrationproviderserviceenum]: {
+    service: S
+    meta: S extends keyof IntegrationAuthMetaByService ? IntegrationAuthMetaByService[S] : null
+  }
+}[Integrationproviderserviceenum]
+
 export const selectTeamMemberIntegrationAuth = () => {
-  return getKysely().selectFrom('TeamMemberIntegrationAuth').selectAll()
+  return getKysely()
+    .selectFrom('TeamMemberIntegrationAuth')
+    .selectAll()
+    .$narrowType<TeamMemberIntegrationAuthByService>()
+}
+
+export const selectAtlassianAuth = () => {
+  return getKysely()
+    .selectFrom('TeamMemberIntegrationAuth')
+    .selectAll()
+    .select([
+      sql<string>`coalesce("scopes", '')`.as('scope'),
+      sql<string[]>`coalesce("meta" -> 'cloudIds', '[]'::jsonb)`.as('cloudIds')
+    ])
+    .where('service', '=', 'jira')
+    .where('accessToken', 'is not', null)
+    .where('refreshToken', 'is not', null)
+    .where('providerUserId', 'is not', null)
+    .$narrowType<{
+      service: 'jira'
+      meta: IntegrationAuthMetaByService['jira']
+      accessToken: NotNull
+      refreshToken: NotNull
+      providerUserId: NotNull
+    }>()
+}
+
+export const selectGitHubAuth = () => {
+  return getKysely()
+    .selectFrom('TeamMemberIntegrationAuth')
+    .selectAll()
+    .select(({ref}) => [
+      ref('providerUserId').as('login'),
+      sql<string>`coalesce("scopes", '')`.as('scope')
+    ])
+    .where('service', '=', 'github')
+    .where('accessToken', 'is not', null)
+    .where('providerUserId', 'is not', null)
+    .$narrowType<{
+      service: 'github'
+      meta: null
+      accessToken: NotNull
+      login: NotNull
+    }>()
 }
 
 export const selectTemplateRef = () => {
@@ -87,6 +144,30 @@ export const selectTemplateDimension = () => {
   return getKysely().selectFrom('TemplateDimension').selectAll().where('removedAt', 'is', null)
 }
 
+export const selectTeamHealthCategories = () => {
+  return getKysely().selectFrom('TeamHealthCategory').selectAll().where('removedAt', 'is', null)
+}
+
+export const selectTeamHealthQuestionPacks = () => {
+  return getKysely().selectFrom('TeamHealthQuestionPack').selectAll()
+}
+
+export const selectTeamHealthQuestions = () => {
+  return getKysely().selectFrom('TeamHealthQuestion').selectAll().where('removedAt', 'is', null)
+}
+
+export const selectTeamHealthTemplateQuestions = () => {
+  return getKysely().selectFrom('TeamHealthTemplateQuestion').selectAll()
+}
+
+export const selectTeamHealthResponses = () => {
+  return getKysely().selectFrom('TeamHealthResponse').selectAll()
+}
+
+export const selectTeamHealthCategorySummaries = () => {
+  return getKysely().selectFrom('TeamHealthCategorySummary').selectAll()
+}
+
 export const selectSuggestedAction = () => {
   return getKysely()
     .selectFrom('SuggestedAction')
@@ -101,28 +182,10 @@ export const selectSuggestedAction = () => {
     >()
 }
 
-// Can revert to using .selectAll() when https://github.com/kysely-org/kysely/pull/1102 is merged
-export const selectTeams = () =>
-  getKysely()
-    .selectFrom('Team')
-    .select([
-      'Team.autoJoin',
-      'Team.createdAt',
-      'Team.createdBy',
-      'Team.id',
-      'Team.isArchived',
-      'Team.isOnboardTeam',
-      'Team.kudosEmojiUnicode',
-      'Team.lastMeetingType',
-      'Team.name',
-      'Team.orgId',
-      'Team.qualAIMeetingsCount',
-      'Team.isPublic',
-      'Team.updatedAt'
-    ])
-    .select(({fn}) => [
-      fn<JiraDimensionField[]>('to_json', ['jiraDimensionFields']).as('jiraDimensionFields')
-    ])
+export const selectTeams = () => {
+  const query = getKysely().selectFrom('Team').selectAll()
+  return query
+}
 
 export const selectRetroReflections = () =>
   getKysely()
@@ -167,12 +230,18 @@ export const selectOrganizations = () =>
       'lockedAt',
       'useAI',
       'unpaidMessageHTML',
-      'updatedAt'
+      'updatedAt',
+      'couponId'
     ])
     .select(({fn}) => [fn<CreditCard | null>('to_json', ['creditCard']).as('creditCard')])
 
-export const selectTeamPromptResponses = () =>
-  getKysely()
+export const selectInspirationItems = () => {
+  const query = getKysely().selectFrom('InspirationItem').selectAll()
+  return query as AssertedQuery<typeof query, {content: JSONContent}>
+}
+
+export const selectTeamPromptResponses = () => {
+  const query = getKysely()
     .selectFrom('TeamPromptResponse')
     .select([
       'id',
@@ -182,26 +251,22 @@ export const selectTeamPromptResponses = () =>
       'userId',
       'sortOrder',
       'content',
-      'plaintextContent'
+      'plaintextContent',
+      'promptId',
+      'sharedAt'
     ])
-    .$narrowType<{content: JSONContent}>()
     .select(({fn}) => [fn<ReactjiDB[]>('to_json', ['reactjis']).as('reactjis')])
-
-export const selectMeetingSettings = () =>
-  getKysely()
+  return query as AssertedQuery<typeof query, {content: JSONContent}>
+}
+export const selectMeetingSettings = () => {
+  const query = getKysely()
     .selectFrom('MeetingSettings')
-    .select([
-      'id',
-      'meetingType',
-      'teamId',
-      'selectedTemplateId',
-      'maxVotesPerGroup',
-      'totalVotes',
-      'disableAnonymity',
-      'videoMeetingURL'
+    .selectAll()
+    .select(({fn}) => [
+      fn<JiraSearchQuery[]>('to_json', ['jiraSearchQueries']).as('jiraSearchQueries'),
+      fn<Newmeetingphasetypeenum[]>('to_json', ['phaseTypes']).as('phaseTypes')
     ])
     .$narrowType<
-      // NewMeeetingPhaseTypeEnum[] should be inferred from kysely-codegen, but it's not
       | {meetingType: 'action' | 'poker' | 'teamPrompt'}
       | {
           meetingType: 'retrospective'
@@ -210,11 +275,11 @@ export const selectMeetingSettings = () =>
           disableAnonymity: NotNull
         }
     >()
-    .select(({fn}) => [
-      fn<JiraSearchQuery[]>('to_json', ['jiraSearchQueries']).as('jiraSearchQueries'),
-      fn<NewMeetingPhaseTypeEnum[]>('to_json', ['phaseTypes']).as('phaseTypes')
-    ])
-
+  return query as AssertedQuery<
+    typeof query,
+    {jiraSearchQueries: JiraSearchQuery[]; phaseTypes: Newmeetingphasetypeenum[]}
+  >
+}
 export const selectAgendaItems = () => getKysely().selectFrom('AgendaItem').selectAll()
 
 export const selectSlackAuths = () => getKysely().selectFrom('SlackAuth').selectAll()
@@ -231,10 +296,10 @@ export const selectComments = () => {
   return query as AssertedQuery<typeof query, {reactjis: ReactjiDB[]}>
 }
 
-export const selectReflectPrompts = () => getKysely().selectFrom('ReflectPrompt').selectAll()
+export const selectTemplatePrompts = () => getKysely().selectFrom('TemplatePrompt').selectAll()
 
-export const selectNewMeetings = () =>
-  getKysely()
+export const selectNewMeetings = () => {
+  const query = getKysely()
     .selectFrom('NewMeeting')
     .select(({fn}) => [
       'id',
@@ -255,7 +320,6 @@ export const selectNewMeetings = () =>
       'scheduledEndTime',
       'summary',
       'sentimentScore',
-      'slackTs',
       'engagement',
       'totalVotes',
       'maxVotesPerGroup',
@@ -278,7 +342,16 @@ export const selectNewMeetings = () =>
       fn('to_json', ['autogroupReflectionGroups']).as('autogroupReflectionGroups'),
       fn('to_json', ['resetReflectionGroups']).as('resetReflectionGroups')
     ])
-    .$narrowType<AnyMeeting>()
+  return query as AssertedQuery<typeof query, AnyMeeting>
+}
+
+export const selectRetroSuggestedGrouping = () => {
+  const query = getKysely()
+    .selectFrom('RetroSuggestedGrouping')
+    .selectAll()
+    .select(({fn}) => [fn<AutogroupReflectionGroupType[]>('to_json', ['groups']).as('groups')])
+  return query as AssertedQuery<typeof query, {groups: AutogroupReflectionGroupType[]}>
+}
 
 export const selectMeetingMembers = () =>
   getKysely().selectFrom('MeetingMember').selectAll().$narrowType<AnyMeetingMember>()
@@ -335,11 +408,22 @@ export const selectPages = (queryCreator: Kysely<DB> | QueryCreator<DB> = getKys
     'ancestorIds',
     'deletedAt',
     'deletedBy',
-    'isDatabase'
+    'isDatabase',
+    'isSyncedBlock',
+    'isMeetingTOC',
+    'summaryMeetingId'
   ])
 
 export const selectPageAccess = () => getKysely().selectFrom('PageAccess').selectAll()
 export const selectPageUserSortOrder = () => getKysely().selectFrom('PageUserSortOrder').selectAll()
+
+export const selectPageExports = () => {
+  const query = getKysely().selectFrom('PageExport').selectAll()
+  return query as AssertedQuery<
+    typeof query,
+    {pagesJson: PageExportPageState[]; degradedJson: DegradedItem[]}
+  >
+}
 
 export const selectDescendantPages = (
   db: ControlledTransaction<DB, []> | Kysely<DB>,
@@ -350,7 +434,7 @@ export const selectDescendantPages = (
       .selectFrom('Page')
       .select(['id', 'parentPageId'])
       .where('id', '=', pageId)
-      .unionAll(
+      .union(
         qc
           .selectFrom('Page as p')
           .innerJoin('descendants as d', 'd.id', 'p.parentPageId')
@@ -359,40 +443,8 @@ export const selectDescendantPages = (
       )
   )
 
-export const selectGitHubAuth = () => {
-  const query = getKysely()
-    .selectFrom('GitHubAuth')
-    .selectAll()
-    .select(({fn}) => [
-      fn<GitHubSearchQuery[]>('to_json', ['githubSearchQueries']).as('githubSearchQueries')
-    ])
-  return query as AssertedQuery<typeof query, {githubSearchQueries: GitHubSearchQuery[]}>
-}
-
-export const selectAtlassianAuth = () => {
-  const query = getKysely()
-    .selectFrom('AtlassianAuth')
-    .selectAll()
-    .select(({fn}) => [
-      fn<JiraSearchQuery[]>('to_json', ['jiraSearchQueries']).as('jiraSearchQueries')
-    ])
-  return query as AssertedQuery<typeof query, {jiraSearchQueries: JiraSearchQuery[]}>
-}
-
-export const selectGitHubDimensionFieldMap = () => {
-  return getKysely().selectFrom('GitHubDimensionFieldMap').selectAll()
-}
-
-export const selectGitLabDimensionFieldMap = () => {
-  return getKysely().selectFrom('GitLabDimensionFieldMap').selectAll()
-}
-
-export const selectJiraDimensionFieldMap = () => {
-  return getKysely().selectFrom('JiraDimensionFieldMap').selectAll()
-}
-
-export const selectJiraServerDimensionFieldMap = () => {
-  return getKysely().selectFrom('JiraServerDimensionFieldMap').selectAll()
+export const selectIntegrationDimensionFieldMap = () => {
+  return getKysely().selectFrom('IntegrationDimensionFieldMap').selectAll()
 }
 
 export const selectIntegrationProvider = () => {
@@ -402,12 +454,26 @@ export const selectIntegrationProvider = () => {
     .$narrowType<TIntegrationProvider>()
 }
 
+type IntegrationSearchQueryByService = {
+  [S in keyof IntegrationSearchQueryJsonByService]: {
+    service: S
+    query: IntegrationSearchQueryJsonByService[S]
+  }
+}[keyof IntegrationSearchQueryJsonByService]
+
 export const selectIntegrationSearchQuery = () => {
-  return getKysely().selectFrom('IntegrationSearchQuery').selectAll()
+  return getKysely()
+    .selectFrom('IntegrationSearchQuery')
+    .selectAll()
+    .$narrowType<IntegrationSearchQueryByService>()
 }
 
 export const selectMeetingSeries = () => {
   return getKysely().selectFrom('MeetingSeries').selectAll()
+}
+
+export const selectMeetingTemplates = () => {
+  return getKysely().selectFrom('MeetingTemplate').selectAll()
 }
 
 export const selectTaskEstimate = () => {
@@ -428,4 +494,53 @@ export const selectPoll = () => {
 
 export const selectPollOption = () => {
   return getKysely().selectFrom('PollOption').selectAll()
+}
+export const selectOAuthAPIProvider = () => {
+  return getKysely()
+    .selectFrom('OAuthAPIProvider')
+    .select([
+      'id',
+      'clientId',
+      'clientSecret',
+      'createdAt',
+      'name',
+      'orgId',
+      'redirectUris',
+      'updatedAt'
+    ])
+    .select(({fn}) => [fn<string[]>('to_json', ['scopes']).as('scopes')])
+}
+
+export const selectOAuthAPICode = () => {
+  return getKysely()
+    .selectFrom('OAuthAPICode')
+    .select(['id', 'clientId', 'createdAt', 'expiresAt', 'redirectUri', 'userId'])
+    .select(({fn}) => [fn<string[]>('to_json', ['scopes']).as('scopes')])
+}
+
+export const selectUserDetails = () => {
+  return getKysely().selectFrom('UserDetail').selectAll()
+}
+
+export const selectTeamDetails = () => {
+  return getKysely().selectFrom('TeamDetail').selectAll()
+}
+
+export const selectPersonalAccessToken = () => {
+  return getKysely()
+    .selectFrom('PersonalAccessToken')
+    .select([
+      'id',
+      'createdAt',
+      'expiresAt',
+      'grantedOrgIds',
+      'grantedPageIds',
+      'grantedTeamIds',
+      'name',
+      'lastUsedAt',
+      'prefix',
+      'revokedAt',
+      'userId'
+    ])
+    .select(({fn}) => [fn<string[]>('to_json', ['scopes']).as('scopes')])
 }

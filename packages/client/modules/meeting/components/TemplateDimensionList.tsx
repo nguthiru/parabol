@@ -1,12 +1,12 @@
-import styled from '@emotion/styled'
+import {DragDropContext, Draggable, Droppable, type DropResult} from '@hello-pangea/dnd'
 import graphql from 'babel-plugin-relay/macro'
-import {DragDropContext, Draggable, Droppable, type DropResult} from 'react-beautiful-dnd'
 import {useFragment} from 'react-relay'
 import type {TemplateDimensionList_dimensions$key} from '../../../__generated__/TemplateDimensionList_dimensions.graphql'
 import useAtmosphere from '../../../hooks/useAtmosphere'
 import MovePokerTemplateDimensionMutation from '../../../mutations/MovePokerTemplateDimensionMutation'
 import {getSortOrder} from '../../../shared/sortOrder'
 import {TEMPLATE_DIMENSION} from '../../../utils/constants'
+import isTempId from '../../../utils/relay/isTempId'
 import TemplateDimensionItem from './TemplateDimensionItem'
 
 interface Props {
@@ -15,12 +15,6 @@ interface Props {
   templateId: string
   readOnly?: boolean
 }
-
-const DimensionList = styled('div')({
-  margin: 0,
-  padding: 0,
-  width: '100%'
-})
 
 const TemplateDimensionList = (props: Props) => {
   const {isOwner, dimensions: dimensionsRef, templateId, readOnly} = props
@@ -60,7 +54,7 @@ const TemplateDimensionList = (props: Props) => {
 
   return (
     <DragDropContext onDragEnd={onDragEnd}>
-      <DimensionList>
+      <div className='m-0 w-full p-0'>
         <Droppable droppableId={TEMPLATE_DIMENSION} isDropDisabled={!isOwner || readOnly}>
           {(provided) => {
             return (
@@ -71,7 +65,7 @@ const TemplateDimensionList = (props: Props) => {
                       key={dimension.id}
                       draggableId={dimension.id}
                       index={idx}
-                      isDragDisabled={!isOwner || readOnly}
+                      isDragDisabled={!isOwner || readOnly || isTempId(dimension.id)}
                     >
                       {(dragProvided, dragSnapshot) => {
                         return (
@@ -93,7 +87,7 @@ const TemplateDimensionList = (props: Props) => {
             )
           }}
         </Droppable>
-      </DimensionList>
+      </div>
     </DragDropContext>
   )
 }

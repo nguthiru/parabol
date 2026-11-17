@@ -1,17 +1,16 @@
-import styled from '@emotion/styled'
 import type * as React from 'react'
 import {forwardRef, useEffect, useImperativeHandle, useState} from 'react'
+import {useLocation, useNavigate} from 'react-router'
 import {commitLocalUpdate} from 'relay-runtime'
 import type Atmosphere from '../Atmosphere'
 import useAtmosphere from '../hooks/useAtmosphere'
 import useForm from '../hooks/useForm'
 import useMutationProps from '../hooks/useMutationProps'
-import useRouter from '../hooks/useRouter'
 import AcceptTeamInvitationMutation from '../mutations/AcceptTeamInvitationMutation'
 import LoginWithPasswordMutation from '../mutations/LoginWithPasswordMutation'
 import SignUpWithPasswordMutation from '../mutations/SignUpWithPasswordMutation'
-import {PALETTE} from '../styles/paletteV3'
-import {LocalStorageKey} from '../types/constEnums'
+import {LocalStorageKey, Security} from '../types/constEnums'
+import {Button} from '../ui/Button/Button'
 import {cn} from '../ui/cn'
 import {CREATE_ACCOUNT_BUTTON_LABEL, SIGNIN_LABEL} from '../utils/constants'
 import getAnonymousId from '../utils/getAnonymousId'
@@ -28,8 +27,6 @@ import ErrorAlert from './ErrorAlert/ErrorAlert'
 import type {AuthPageSlug} from './GenericAuthentication'
 import PasswordInputField from './PasswordInputField'
 import PlainButton from './PlainButton/PlainButton'
-import PrimaryButton from './PrimaryButton'
-import RaisedButton from './RaisedButton'
 import StyledTip from './StyledTip'
 
 interface Props {
@@ -42,31 +39,6 @@ interface Props {
   isSignin?: boolean
   goToPage?: (page: AuthPageSlug, params: string) => void
 }
-
-const FieldBlock = styled('div')<{isSSO?: boolean}>(({isSSO}) => ({
-  margin: '0 0 1.25rem',
-  visibility: isSSO ? 'hidden' : undefined
-}))
-
-const Form = styled('form')({
-  display: 'flex',
-  flexDirection: 'column',
-  maxWidth: 240,
-  width: '100%'
-})
-
-const HelpMessage = styled(StyledTip)({
-  paddingTop: 8,
-  fontSize: 14
-})
-
-const UseSSO = styled(PlainButton)({
-  color: PALETTE.SKY_500,
-  display: 'flex',
-  fontSize: 14,
-  justifyContent: 'center',
-  marginTop: 16
-})
 
 const getSSOUrl = (atmosphere: Atmosphere, email: string) => {
   const invitationToken = localStorage.getItem(LocalStorageKey.INVITATION_TOKEN)
@@ -84,7 +56,7 @@ const validateEmail = (email: string) => {
 const validatePassword = (password: string) => {
   return new Legitity(password)
     .required('Please enter a password')
-    .min(6, '6 character minimum')
+    .min(Security.MIN_PASSWORD_LENGTH, `${Security.MIN_PASSWORD_LENGTH} character minimum`)
     .max(1000, `That's a book, not a password`)
 }
 
@@ -96,7 +68,7 @@ const EmailPasswordAuthForm = forwardRef((props: Props, ref: any) => {
   const isSingleTenantSSO =
     isSSOAuthEnabled && !isGoogleAuthEnabled && !isMicrosoftAuthEnabled && !isInternalAuthEnabled
   const {getOffsetTop, isPrimary, isSignin, invitationToken, email, goToPage} = props
-  const {location} = useRouter()
+  const location = useLocation()
   const params = new URLSearchParams(location.search)
   const isSSODefault = isSSOAuthEnabled && Boolean(params.get('sso'))
   const signInWithSSOOnly = isSSOAuthEnabled && !isInternalAuthEnabled
@@ -104,9 +76,11 @@ const EmailPasswordAuthForm = forwardRef((props: Props, ref: any) => {
   const [ssoMessage, setSSOMessage] = useState('')
   const [pendingDomain, setPendingDomain] = useState('')
   const [ssoDomain, setSSODomain] = useState<string>()
-  const {submitMutation, onCompleted, submitting, error, onError} = useMutationProps()
+  const {submitMutation, onCompleted, submitting, error, onError} = useMutationProps({
+    errorDisplay: 'inline'
+  })
   const atmosphere = useAtmosphere()
-  const {history} = useRouter()
+  const navigate = useNavigate()
   const {fields, onChange, setDirtyField, validateField} = useForm({
     email: {
       getDefault: () => email,
@@ -216,11 +190,11 @@ const EmailPasswordAuthForm = forwardRef((props: Props, ref: any) => {
       AcceptTeamInvitationMutation(
         atmosphere,
         {invitationToken},
-        {history, onCompleted, onError, ignoreApproval: true}
+        {navigate, onCompleted, onError, ignoreApproval: true}
       )
     } else {
       const nextUrl = getValidRedirectParam() || '/meetings'
-      history.push(nextUrl)
+      navigate(nextUrl)
     }
     return true
   }
@@ -250,7 +224,7 @@ const EmailPasswordAuthForm = forwardRef((props: Props, ref: any) => {
           invitationToken: invitationToken || '',
           isInvitation: !!invitationToken
         },
-        {onError, onCompleted, history}
+        {onError, onCompleted, navigate}
       )
     } else {
       const pseudoId = await getAnonymousId()
@@ -267,51 +241,68 @@ const EmailPasswordAuthForm = forwardRef((props: Props, ref: any) => {
         {
           onError,
           onCompleted,
-          history
+          navigate
         }
       )
     }
   }
 
-  const Button = isPrimary ? PrimaryButton : RaisedButton
   const hasEmail = !!fields.email.value
+  const submitLabel = `${isSignin ? SIGNIN_LABEL : CREATE_ACCOUNT_BUTTON_LABEL}${
+    signInWithSSOOnly ? ' with SSO' : ''
+  }`
   return (
     <>
-      <Form onSubmit={onSubmit}>
+      <form className='flex w-full max-w-60 flex-col' onSubmit={onSubmit}>
         {error && <ErrorAlert message={error.message} />}
-        {isSSO && submitting && <HelpMessage>Continue through the login popup</HelpMessage>}
+        {isSSO && submitting && (
+          <StyledTip className='pt-2 text-[14px]'>Continue through the login popup</StyledTip>
+        )}
         <div className={cn('relative', signInWithSSOOnly ? 'hidden' : 'mt-4 mb-4')}>
-          <FieldBlock isSSO={signInWithSSOOnly}>
+          <div className={cn('mb-5', signInWithSSOOnly && 'invisible')}>
             <EmailInputField
               autoFocus={!hasEmail}
               {...fields.email}
               onChange={onChange}
               onBlur={handleBlur}
             />
-          </FieldBlock>
+          </div>
           {ssoMessage && (
             <div className='absolute w-full text-center font-medium text-sm'>{ssoMessage}</div>
           )}
           {isInternalAuthEnabled && (
-            <FieldBlock isSSO={isSSO}>
+            <div className={cn('mb-5', isSSO && 'invisible')}>
               <PasswordInputField
                 autoFocus={hasEmail}
                 {...fields.password}
                 onChange={onChange}
                 onBlur={handleBlur}
               />
-            </FieldBlock>
+            </div>
           )}
         </div>
-        <Button size='medium' disabled={false} waiting={submitting}>
-          {isSignin ? SIGNIN_LABEL : CREATE_ACCOUNT_BUTTON_LABEL}
-          {signInWithSSOOnly ? ' with SSO' : ''}
-        </Button>
-      </Form>
+        {isPrimary ? (
+          <Button variant='primary' size='md' className='h-10 text-[15px]' disabled={submitting}>
+            {submitLabel}
+          </Button>
+        ) : (
+          <Button
+            variant='raised'
+            size='md'
+            className='h-10 bg-slate-200 text-[15px] text-slate-700'
+            disabled={submitting}
+          >
+            {submitLabel}
+          </Button>
+        )}
+      </form>
       {isSSOAuthEnabled && isInternalAuthEnabled && (
-        <UseSSO onClick={toggleSSO}>
+        <PlainButton
+          className='mt-4 flex justify-center text-[14px] text-accent'
+          onClick={toggleSSO}
+        >
           {`Sign ${isSignin ? 'in' : 'up'} ${isSSO ? 'without' : 'with'} SSO`}
-        </UseSSO>
+        </PlainButton>
       )}
     </>
   )

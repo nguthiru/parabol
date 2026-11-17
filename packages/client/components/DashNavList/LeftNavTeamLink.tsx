@@ -1,13 +1,13 @@
-import AddIcon from '@mui/icons-material/Add'
-import GroupIcon from '@mui/icons-material/Group'
-import ManageAccountsIcon from '@mui/icons-material/ManageAccounts'
 import graphql from 'babel-plugin-relay/macro'
 import {useState} from 'react'
-import {useFragment} from 'react-relay'
-import {useHistory, useRouteMatch} from 'react-router'
-import {Link} from 'react-router-dom'
+import {useClientQuery, useFragment} from 'react-relay'
+import {Link, useMatch, useNavigate} from 'react-router'
+import {Add as AddIcon, Group as GroupIcon, ManageAccounts as ManageAccountsIcon} from '~/ui/icons'
 import type {LeftNavTeamLink_team$key} from '../../__generated__/LeftNavTeamLink_team.graphql'
 import type {PageRoleEnum} from '../../__generated__/NotificationSubscription.graphql'
+import pageDropTargetQuery, {
+  type PageDropTargetQuery
+} from '../../__generated__/PageDropTargetQuery.graphql'
 import {PageDropTarget} from '../../modules/pages/PageDropTarget'
 import {useCreatePageMutation} from '../../mutations/useCreatePageMutation'
 import {cn} from '../../ui/cn'
@@ -26,6 +26,8 @@ interface Props {
   closeMobileSidebar?: () => void
 }
 export const LeftNavTeamLink = (props: Props) => {
+  const {viewer} = useClientQuery<PageDropTargetQuery>(pageDropTargetQuery, {})
+  const {draggingBlocksSourcePageId} = viewer ?? {}
   const {
     closeMobileSidebar,
     teamRef,
@@ -49,13 +51,13 @@ export const LeftNavTeamLink = (props: Props) => {
   const {name: teamName, id: teamId, isDraggingFirstChild, isDraggingLastChild, orgId} = team
   const isDraggingPageFromTheTeam = draggingPageParentSection === teamId
   const isViewerOwnerOrIsReorder = isViewerOwnerOfDraggingPage || isDraggingPageFromTheTeam
-  const match = useRouteMatch(`/team/${teamId}`)
-  const isActive = match ?? false
+  const match = useMatch({path: `/team/${teamId}`, end: false})
+  const isActive = !!match
   const [showChildren, setShowChildren] = useState(false)
   const expandChildPages = () => {
     setShowChildren(!showChildren)
   }
-  const history = useHistory()
+  const navigate = useNavigate()
   const [execute, submitting] = useCreatePageMutation()
   const addChildPage = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -68,7 +70,7 @@ export const LeftNavTeamLink = (props: Props) => {
         const {page} = createPage
         const {id} = page
         const [_, pageCode] = id.split(':')
-        history.push(`/pages/${pageCode}`)
+        navigate(`/pages/${pageCode}`)
         setShowChildren(true)
       }
     })
@@ -83,10 +85,10 @@ export const LeftNavTeamLink = (props: Props) => {
         data-highlighted={isActive ? '' : undefined}
         data-drop-in={canDropIn ? teamId : undefined}
         className={cn(
-          'peer group relative my-0.5 flex w-full cursor-pointer items-center space-x-2 rounded-md px-1 py-1 text-slate-700 text-sm leading-8 outline-hidden',
+          'peer group relative my-0.5 flex w-full cursor-pointer items-center space-x-2 rounded-md border-l-[3px] border-l-transparent px-1 py-1 text-fg-nav text-sm leading-8 outline-hidden before:absolute before:inset-y-1 before:left-px before:w-[3px] before:rounded-full before:bg-transparent',
           // when in dragging mode, hide hover/focus/active slate background so you only see blue
           !draggingPageId &&
-            'hover:bg-slate-300 focus:bg-slate-300 data-highlighted:bg-slate-300 data-highlighted:text-slate-900',
+            'hover:bg-surface-nav-hover focus:bg-surface-nav-hover data-highlighted:bg-surface-nav-active data-highlighted:text-fg-primary data-highlighted:before:bg-(--color-accent-active)',
           draggingPageId && 'cursor-pointer'
         )}
       >
@@ -102,7 +104,7 @@ export const LeftNavTeamLink = (props: Props) => {
         <Link
           draggable={false}
           to={`/team/${teamId}`}
-          className={'flex w-full items-center'}
+          className={'flex w-full items-center text-inherit hover:text-inherit'}
           onClick={(e) => {
             if (draggingPageId) {
               e.preventDefault()
@@ -113,7 +115,7 @@ export const LeftNavTeamLink = (props: Props) => {
           <ExpandPageChildrenButton
             showChildren={showChildren}
             expandChildPages={expandChildPages}
-            draggingPageId={draggingPageId}
+            isDragging={!!draggingPageId || !!draggingBlocksSourcePageId}
             icon={GroupIcon}
           />
           <LeftNavItem>
@@ -124,7 +126,7 @@ export const LeftNavTeamLink = (props: Props) => {
               Icon={ManageAccountsIcon}
               onClick={(e) => {
                 e.preventDefault()
-                history.push(`/me/organizations/${orgId}/teams/${teamId}`)
+                navigate(`/me/organizations/${orgId}/teams/${teamId}`)
               }}
               tooltip='Manage team'
             />

@@ -1,25 +1,24 @@
-import styled from '@emotion/styled'
-import {useEventCallback} from '@mui/material'
 import graphql from 'babel-plugin-relay/macro'
 import type * as React from 'react'
-import {type MutableRefObject, type RefObject, useEffect, useMemo, useState} from 'react'
+import {type RefObject, useEffect, useMemo, useState} from 'react'
+import {createPortal} from 'react-dom'
 import {useFragment} from 'react-relay'
+import useEventCallback from '~/hooks/useEventCallback'
 import type {PhaseItemEditor_meeting$key} from '../../__generated__/PhaseItemEditor_meeting.graphql'
 import useAtmosphere from '../../hooks/useAtmosphere'
 import useIsEditing from '../../hooks/useIsEditing'
+import useIsFocused from '../../hooks/useIsFocused'
 import useMutationProps from '../../hooks/useMutationProps'
-import usePortal from '../../hooks/usePortal'
 import {useTipTapReflectionEditor} from '../../hooks/useTipTapReflectionEditor'
 import CreateReflectionMutation from '../../mutations/CreateReflectionMutation'
 import EditReflectionMutation from '../../mutations/EditReflectionMutation'
-import {Elevation} from '../../styles/elevation'
-import {BezierCurve, ZIndex} from '../../types/constEnums'
 import {cn} from '../../ui/cn'
 import {modEnter} from '../../utils/platform'
-import {TipTapEditor} from '../promptResponse/TipTapEditor'
+import setStorageItem from '../../utils/setStorageItem'
 import ReflectionCardAuthor from '../ReflectionCard/ReflectionCardAuthor'
 import ReflectionCardRoot from '../ReflectionCard/ReflectionCardRoot'
 import SubmitReflectionButton from '../ReflectionCard/SubmitReflectionButton'
+import {TipTapEditor} from '../TipTapEditor/TipTapEditor'
 import getBBox from './getBBox'
 import HTMLReflection from './HTMLReflection'
 import type {ReflectColumnCardInFlight} from './PhaseItemColumn'
@@ -29,28 +28,16 @@ const FLIGHT_TIME = 500
 const PLACEHOLDERS = ['Share your thoughts', 'Hit / for commands', `Press ${modEnter} to submit`]
 let initialPlaceHolderIndex = 0
 
-const CardInFlightStyles = styled(ReflectionCardRoot)<{
-  transform: string
-  isStart: boolean
-}>(({isStart, transform}) => ({
-  boxShadow: isStart ? Elevation.Z8 : Elevation.Z0,
-  position: 'absolute',
-  top: 0,
-  transform,
-  transition: `all ${FLIGHT_TIME}ms ${BezierCurve.DECELERATE}`,
-  zIndex: ZIndex.REFLECTION_IN_FLIGHT
-}))
-
 interface Props {
-  cardsInFlightRef: MutableRefObject<ReflectColumnCardInFlight[]>
+  cardsInFlightRef: RefObject<ReflectColumnCardInFlight[]>
   forceUpdateColumn: () => void
   meetingId: string
   nextSortOrder: () => number
-  phaseEditorRef: React.RefObject<HTMLDivElement>
+  phaseEditorRef: React.RefObject<HTMLDivElement | null>
   promptId: string
-  stackTopRef: RefObject<HTMLDivElement>
-  dataCy: string
+  stackTopRef: RefObject<HTMLDivElement | null>
   readOnly?: boolean
+  autoFocus: boolean
   meetingRef: PhaseItemEditor_meeting$key
 }
 
@@ -63,8 +50,8 @@ const PhaseItemEditor = (props: Props) => {
     stackTopRef,
     cardsInFlightRef,
     forceUpdateColumn,
-    dataCy,
     readOnly,
+    autoFocus,
     meetingRef
   } = props
   const atmosphere = useAtmosphere()
@@ -130,7 +117,6 @@ const PhaseItemEditor = (props: Props) => {
       key: content,
       isStart: true
     }
-    openPortal()
     cardsInFlightRef.current = [...cardsInFlightRef.current, cardInFlight]
     editor.commands.clearOnSubmit()
     forceUpdateColumn()
@@ -165,7 +151,8 @@ const PhaseItemEditor = (props: Props) => {
       placeholder,
       teamId,
       readOnly: !!readOnly,
-      onModEnter: handleSubmit
+      onModEnter: handleSubmit,
+      autoFocus: autoFocus && !readOnly
     }
   )
 
@@ -197,7 +184,7 @@ const PhaseItemEditor = (props: Props) => {
       })
     }
   })
-  const isFocused = editor?.isFocused
+  const isFocused = useIsFocused(editor)
 
   useEffect(() => {
     if (!editor) return
@@ -213,7 +200,7 @@ const PhaseItemEditor = (props: Props) => {
       if (editor.isEmpty) {
         window.localStorage.removeItem(draftStorageKey)
       } else {
-        window.localStorage.setItem(draftStorageKey, JSON.stringify(editor.getJSON()))
+        setStorageItem('localStorage', draftStorageKey, JSON.stringify(editor.getJSON()))
       }
     }
 
@@ -223,10 +210,6 @@ const PhaseItemEditor = (props: Props) => {
     }
   }, [editor])
 
-  const {terminatePortal, openPortal, portal} = usePortal({
-    noClose: true,
-    id: 'phaseItemEditor'
-  })
   const showButtons = isFocused || isEditing || (editor && !editor?.isEmpty)
   const showFooter = showButtons || disableAnonymity
 
@@ -237,7 +220,6 @@ const PhaseItemEditor = (props: Props) => {
       ...cardsInFlightRef.current.slice(0, idx),
       ...cardsInFlightRef.current.slice(idx + 1)
     ]
-    if (nextCardsInFlight.length === 0) terminatePortal()
     cardsInFlightRef.current = nextCardsInFlight
     forceUpdateColumn()
   }
@@ -245,10 +227,10 @@ const PhaseItemEditor = (props: Props) => {
   if (!editor) return null
   return (
     <>
-      <ReflectionCardRoot data-cy={dataCy} ref={phaseEditorRef} className='pb-2'>
+      <ReflectionCardRoot ref={phaseEditorRef} className='pb-2'>
         <TipTapEditor
           className={cn('flex h-fit max-h-41 overflow-auto px-4 pt-2 transition-all', {
-            'min-h-16': isEditing || isFocused
+            'min-h-16': isFocused
           })}
           editor={editor}
         />
@@ -269,29 +251,32 @@ const PhaseItemEditor = (props: Props) => {
           )}
         </div>
       </ReflectionCardRoot>
-      {portal(
-        <>
-          {cardsInFlightRef.current.map((card) => {
+      {cardsInFlightRef.current.length > 0 &&
+        createPortal(
+          cardsInFlightRef.current.map((card) => {
             return (
-              <CardInFlightStyles
+              <ReflectionCardRoot
                 key={card.key}
-                transform={card.transform}
-                isStart={card.isStart}
+                className={cn(
+                  'absolute top-0 z-8 transition-all duration-500 ease-out',
+                  card.isStart ? 'shadow-[var(--shadow-card-raised)]' : 'shadow-card-grounded'
+                )}
+                style={{transform: card.transform}}
                 onTransitionEnd={removeCardInFlight(card.key)}
               >
                 <HTMLReflection html={card.html} disableAnonymity={disableAnonymity} />
                 {disableAnonymity && (
-                  <div className='py-2 pl-4'>
+                  <div className='px-2 pt-0.5 pb-2'>
                     <ReflectionCardAuthor>
                       {viewerMeetingMember?.user.preferredName}
                     </ReflectionCardAuthor>
                   </div>
                 )}
-              </CardInFlightStyles>
+              </ReflectionCardRoot>
             )
-          })}
-        </>
-      )}
+          }),
+          document.body
+        )}
     </>
   )
 }

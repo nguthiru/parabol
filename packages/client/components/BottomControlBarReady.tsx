@@ -1,19 +1,18 @@
-import styled from '@emotion/styled'
-import {ArrowForward, CheckCircle, CheckCircleOutline} from '@mui/icons-material'
 import graphql from 'babel-plugin-relay/macro'
 import {useMemo} from 'react'
 import {useFragment} from 'react-relay'
 import type {BottomControlBarReady_meeting$key} from '~/__generated__/BottomControlBarReady_meeting.graphql'
 import useAtmosphere from '~/hooks/useAtmosphere'
 import type useGotoNext from '~/hooks/useGotoNext'
-import type {TransitionStatus} from '~/hooks/useTransition'
 import FlagReadyToAdvanceMutation from '~/mutations/FlagReadyToAdvanceMutation'
-import {PALETTE} from '~/styles/paletteV3'
-import {BezierCurve, Times} from '~/types/constEnums'
+import {BezierCurve} from '~/types/constEnums'
+import {ArrowForward, CheckCircle, CheckCircleOutline} from '~/ui/icons'
+import {Tooltip} from '~/ui/Tooltip/Tooltip'
+import {TooltipContent} from '~/ui/Tooltip/TooltipContent'
+import {TooltipTrigger} from '~/ui/Tooltip/TooltipTrigger'
 import handleRightArrow from '~/utils/handleRightArrow'
 import type {NewMeetingPhaseTypeEnum} from '../__generated__/BottomControlBarReady_meeting.graphql'
-import {MenuPosition} from '../hooks/useCoords'
-import useTooltip from '../hooks/useTooltip'
+import {cn} from '../ui/cn'
 import BottomControlBarProgress from './BottomControlBarProgress'
 import BottomNavControl from './BottomNavControl'
 import BottomNavIconLabel from './BottomNavIconLabel'
@@ -27,29 +26,8 @@ interface Props {
   setConfirmingButton: (button: string) => void
   isDemoStageComplete?: boolean
   meeting: BottomControlBarReady_meeting$key
-  status: TransitionStatus
-  onTransitionEnd: () => void
   handleGotoNext: ReturnType<typeof useGotoNext>
 }
-
-const StyledIcon = styled('div')<{
-  progress: number
-  isNext: boolean
-  isViewerReady: boolean
-}>(({isViewerReady, progress, isNext}) => ({
-  height: 24,
-  width: 24,
-  transformOrigin: '0 0',
-  // 20px to 16 = 0.75
-  transform: isNext ? (progress > 0 ? `scale(0.75)translate(4px, 4px)` : undefined) : 'none',
-  transition: `transform 100ms ${BezierCurve.DECELERATE}`,
-  svg: {
-    // without fill property the stroke property will be ignored
-    fill: isNext ? PALETTE.ROSE_500 : isViewerReady ? PALETTE.JADE_400 : PALETTE.SLATE_600,
-    stroke: isNext ? PALETTE.ROSE_500 : isViewerReady ? PALETTE.JADE_400 : PALETTE.SLATE_600,
-    strokeWidth: isNext ? 1 : 0
-  }
-}))
 
 const PHASE_REQUIRES_CONFIRM = new Set<NewMeetingPhaseTypeEnum>(['reflect', 'group', 'vote'])
 
@@ -62,9 +40,7 @@ const BottomControlBarReady = (props: Props) => {
     isFacilitating,
     setConfirmingButton,
     handleGotoNext,
-    meeting: meetingRef,
-    onTransitionEnd,
-    status
+    meeting: meetingRef
   } = props
   const atmosphere = useAtmosphere()
   const {viewerId} = atmosphere
@@ -119,13 +95,7 @@ const BottomControlBarReady = (props: Props) => {
     ).length
   }, [readyUserIds, connectedMeetingMembers, isFacilitating, viewerId])
 
-  const {openTooltip, tooltipPortal, originRef} = useTooltip<HTMLDivElement>(
-    MenuPosition.UPPER_CENTER,
-    {
-      delay: Times.MEETING_CONFIRM_TOOLTIP_DELAY
-    }
-  )
-  const isOnlyViewer = activeCount === 1 // viewer is the only active meeting member
+  const isOnlyViewer = activeCount === 1
   const progress = isOnlyViewer || isPoker ? 1.0 : readyCount / (activeCount - 1)
   const isLastStageInPhase = stages[stages.length - 1]?.id === localStage?.id
   const isConfirmRequired =
@@ -146,8 +116,6 @@ const BottomControlBarReady = (props: Props) => {
       gotoNext()
     } else {
       setConfirmingButton('next')
-      // let the above flush so isConfirming is set before opening
-      setTimeout(openTooltip)
     }
   }
   const onKeyDown = isNext
@@ -162,26 +130,43 @@ const BottomControlBarReady = (props: Props) => {
     label = isViewerReady ? 'Undo ready status' : 'Tap when ready'
   }
 
+  const iconColor = isNext ? 'text-rose-500' : isViewerReady ? 'text-jade-400' : 'text-fg-secondary'
+
   return (
-    <>
+    <Tooltip open={isConfirming}>
       <BottomNavControl
-        dataCy={`next-phase`}
         confirming={!!cancelConfirm}
         onClick={cancelConfirm || onClick}
-        status={status}
-        onTransitionEnd={onTransitionEnd}
         onKeyDown={onKeyDown}
         ref={ref}
       >
         {isNext && <BottomControlBarProgress isNext={isNext} progress={progress} />}
-        <BottomNavIconLabel className='px-2' label={label} ref={originRef}>
-          <StyledIcon isViewerReady={isViewerReady} isNext={isNext} progress={progress}>
-            {isNext ? <ArrowForward /> : isViewerReady ? <CheckCircle /> : <CheckCircleOutline />}
-          </StyledIcon>
-        </BottomNavIconLabel>
+        <TooltipTrigger asChild>
+          <BottomNavIconLabel className='px-2' label={label}>
+            <div
+              className={cn('h-6 w-6 origin-top-left', iconColor)}
+              style={{
+                transform: isNext
+                  ? progress > 0
+                    ? 'scale(0.75)translate(4px, 4px)'
+                    : undefined
+                  : 'none',
+                transition: `transform 100ms ${BezierCurve.DECELERATE}`
+              }}
+            >
+              {isNext ? (
+                <ArrowForward className='stroke-1 stroke-current' />
+              ) : isViewerReady ? (
+                <CheckCircle />
+              ) : (
+                <CheckCircleOutline />
+              )}
+            </div>
+          </BottomNavIconLabel>
+        </TooltipTrigger>
       </BottomNavControl>
-      {tooltipPortal(`Tap 'Next' again if everyone is ready`)}
-    </>
+      <TooltipContent>{`Tap 'Next' again if everyone is ready`}</TooltipContent>
+    </Tooltip>
   )
 }
 

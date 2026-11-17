@@ -1,6 +1,5 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
-import {useMemo, useState} from 'react'
+import {useState} from 'react'
 import {useFragment} from 'react-relay'
 import useSpotlightResults from '~/hooks/useSpotlightResults'
 import type {DraggableReflectionCard_meeting$key} from '../../__generated__/DraggableReflectionCard_meeting.graphql'
@@ -40,23 +39,19 @@ const makeDragState = () => ({
   timeout: null as null | number
 })
 
-const DragWrapper = styled('div')<{showDragCursor: boolean | undefined}>(({showDragCursor}) => ({
-  cursor: showDragCursor ? 'grab' : undefined
-}))
-
 export type ReflectionDragState = ReturnType<typeof makeDragState>
 
 interface Props {
   isClipped?: boolean
   isDraggable?: boolean
   meeting: DraggableReflectionCard_meeting$key
+  onHoverReflection?: (reflectionId: string | null) => void
   openSpotlight?: OpenSpotlight
   reflection: DraggableReflectionCard_reflection$key
   staticIdx?: number
   staticReflections: DraggableReflectionCard_staticReflections$key | null
   swipeColumn?: SwipeColumn
-  dataCy?: string
-  isSpotlightEntering?: boolean
+  isExpanded?: boolean
   showDragHintAnimation?: boolean
 }
 
@@ -75,11 +70,11 @@ const DraggableReflectionCard = (props: Props) => {
     staticIdx = 0,
     staticReflections: staticReflectionsRef,
     meeting: meetingRef,
+    onHoverReflection,
     openSpotlight,
     isDraggable,
+    isExpanded,
     swipeColumn,
-    dataCy,
-    isSpotlightEntering,
     showDragHintAnimation
   } = props
   const staticReflections = useFragment(
@@ -135,7 +130,6 @@ const DraggableReflectionCard = (props: Props) => {
           id
         }
         spotlightReflectionId
-        spotlightSearchQuery
       }
     `,
     meetingRef
@@ -149,17 +143,12 @@ const DraggableReflectionCard = (props: Props) => {
   const staticReflectionCount = staticReflections?.length || 0
   const [drag] = useState(makeDragState)
   const spotlightResultGroups = useSpotlightResults(meeting)
-  const isReflectionIdInSpotlight = useMemo(() => {
-    return (
-      reflectionId === spotlightReflectionId ||
-      !!(
-        reflectionId &&
-        spotlightResultGroups?.find(({reflections}) =>
-          reflections?.find(({id}) => id === reflectionId)
-        )
-      )
-    )
-  }, [spotlightResultGroups, reflectionId, spotlightReflectionId])
+  const isReflectionIdInSpotlight =
+    spotlightResultGroups != null &&
+    (reflectionId === spotlightReflectionId ||
+      spotlightResultGroups.some(({reflections}) =>
+        reflections?.some(({id}) => id === reflectionId)
+      ))
   const {onMouseDown} = useDraggableReflectionCard(
     meeting,
     reflection,
@@ -173,34 +162,31 @@ const DraggableReflectionCard = (props: Props) => {
   const showDragCursor = isDraggable && canHandleDrag && !isEditing && !isDropping
   // slow state updates can mean we miss an onMouseDown event
   const handleDrag = canHandleDrag ? onMouseDown : undefined
-
   return (
-    <DragWrapper
+    <div
+      className={showDragCursor ? 'cursor-grab' : undefined}
       ref={(c) => {
-        // If the spotlight is closed, this card is the single source of truth
-        // Else, if it's a remote drag that is not in the spotlight
-        // Else, if this is the instance in the source or search results
-        // And Spotlight modal isn't entering. This throws off dropping remote card position
         const isPriorityCard =
-          (!isSpotlightOpen || (!isReflectionIdInSpotlight && remoteDrag) || isInSpotlight) &&
-          !isSpotlightEntering
+          !isSpotlightOpen || (!isReflectionIdInSpotlight && remoteDrag) || isInSpotlight
         if (isPriorityCard) {
           drag.ref = c
         }
       }}
       onMouseDown={handleDrag}
       onTouchStart={handleDrag}
-      showDragCursor={showDragCursor}
+      onMouseEnter={() => onHoverReflection?.(reflectionId)}
+      onMouseLeave={() => onHoverReflection?.(null)}
     >
       <ReflectionCard
-        dataCy={dataCy}
         reflectionRef={reflection}
         isClipped={isClipped}
         meetingRef={meeting}
         openSpotlight={openSpotlight}
+        groupSize={staticReflectionCount}
+        isExpanded={isExpanded}
         showDragHintAnimation={showDragHintAnimation}
       />
-    </DragWrapper>
+    </div>
   )
 }
 

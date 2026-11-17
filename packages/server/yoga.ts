@@ -1,25 +1,43 @@
 import type uws from 'uWebSockets.js'
+import {readFileSync} from 'node:fs'
+import path from 'node:path'
+import {OneOfInputObjectsRule, useExtendedValidation} from '@envelop/extended-validation'
 import {useDeferStream} from '@graphql-yoga/plugin-defer-stream'
 import {usePersistedOperations} from '@graphql-yoga/plugin-persisted-operations'
 import {useCookies} from '@whatwg-node/server-plugin-cookies'
-import type {GraphQLParams} from 'graphql-yoga'
-import {createYoga, useReadinessCheck} from 'graphql-yoga'
+import {print} from 'graphql'
+import {createYoga, type GraphQLParams, useReadinessCheck} from 'graphql-yoga'
 import {sql} from 'kysely'
+import getProjectRoot from '../../scripts/webpack/utils/getProjectRoot'
+import {MAX_FILE_SIZE_PAID} from '../client/utils/constants'
 import sleep from '../client/utils/sleep'
 import type AuthToken from './database/types/AuthToken'
 import {getIsBusy} from './getIsBusy'
 import {getIsShuttingDown} from './getIsShuttingDown'
 import getRateLimiter from './graphql/getRateLimiter'
 import type {MutationResolvers, QueryResolvers, Resolver} from './graphql/private/resolverTypes'
+import {getFullSchema} from './graphql/private/rootSchema'
+import {PAT_PREFIX} from './graphql/public/applyScopeDirective'
+import type {ResourceGrants} from './graphql/public/ResourceGrants'
 import rootSchema from './graphql/public/rootSchema'
+import {ENABLE_METRICS, graphqlPrometheusPlugin} from './metricsHandler'
 import getKysely from './postgres/getKysely'
+import {TRACING_ENABLED} from './tracing/initTracing'
+import {useTracing} from './tracing/useTracing'
 import {getAuthTokenFromCookie} from './utils/authCookie'
 import getVerifiedAuthToken from './utils/getVerifiedAuthToken'
 import {Logger} from './utils/Logger'
+import maskErrorWithTraceId from './utils/maskErrorWithTraceId'
+import {useAPIAccess} from './utils/useAPIAccess'
+import {useArmor} from './utils/useArmor'
 import {useAuditLogs} from './utils/useAuditLogs'
-import {useDatadogTracing} from './utils/useDatadogTracing'
+import {useCheckBlacklist} from './utils/useCheckBlacklist'
 import {useDisposeDataloader} from './utils/useDisposeDataloader'
-import {usePrivateSchemaForSuperUser} from './utils/usePrivateSchemaForSuperUser'
+import {useErrorLogging} from './utils/useErrorLogging'
+import {useNestedSchemaFallback} from './utils/useNestedSchemaFallback'
+import {useRemoveDuplicateTransferEncoding} from './utils/useRemoveDuplicateTransferEncoding'
+import {useSchemaLink} from './utils/useSchemaLink'
+import {useVendorWait} from './utils/vendorWait'
 
 type OperationResolvers = QueryResolvers & MutationResolvers
 type ExtractArgs<T> = T extends Resolver<any, any, any, infer Args> ? Args : never
@@ -33,6 +51,15 @@ export interface ServerContext {
   res: uws.HttpResponse
   ip: string
   authToken: AuthToken | null
+  docId?: string | null | undefined
+  // the cost of the adhoc query. undefined if it is a persisted query
+  apiCost?: number
+  // present if the request is from a Personal Access Token or an OAuth access token
+  resourceGrants?: ResourceGrants
+  personalAccessTokenId?: string
+  traceparent?: string
+  sessionId?: string
+  socketId?: string
 }
 
 export interface UserContext {
@@ -46,17 +73,29 @@ export const extractPersistedOperationId = (
 }
 
 const queryMap = {} as Record<string, string | undefined>
+// In development the map is read off disk instead of bundled, because relay keeps persisting queries while the server runs
 const primeQueryMap = () => {
   if (__PRODUCTION__) return
-  const primed = require('../../queryMap.json')
+  let primed: Record<string, string>
+  try {
+    primed = JSON.parse(readFileSync(path.join(getProjectRoot()!, 'queryMap.json'), 'utf-8'))
+  } catch {
+    Logger.warn('queryMap.json not found. Run `pnpm relay:build`')
+    return
+  }
   Object.keys(primed).forEach((key) => {
-    queryMap[key] = primed[key].replace('@stream_HACK', '@stream')
+    queryMap[key] = primed[key]!.replace('@stream_HACK', '@stream')
   })
 }
 primeQueryMap()
 
 export const getPersistedOperation = async (docId: string) => {
   let queryString = queryMap[docId]
+  if (!queryString && !__PRODUCTION__) {
+    // a query that was written after the server started
+    primeQueryMap()
+    queryString = queryMap[docId]
+  }
   if (!queryString) {
     const queryStringRes = await getKysely()
       .selectFrom('QueryMap')
@@ -73,11 +112,22 @@ export const getPersistedOperation = async (docId: string) => {
   return queryString || null
 }
 
+// the largest upload plus the multipart boundaries and operations JSON that wrap it
+const MAX_REQUEST_BODY_SIZE = MAX_FILE_SIZE_PAID + 1_000_000
+
 export const yoga = createYoga<ServerContext, UserContext>({
   graphqlEndpoint: '/graphql',
   landingPage: false,
   logging: Logger,
+  maskedErrors: {maskError: maskErrorWithTraceId},
+  maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
   plugins: [
+    useRemoveDuplicateTransferEncoding,
+    useSchemaLink,
+    useNestedSchemaFallback(),
+    useDisposeDataloader,
+    useAPIAccess(),
+    useArmor(),
     useAuditLogs({
       excludeArgs: {
         acceptTeamInvitation: ['invitationToken'],
@@ -89,23 +139,31 @@ export const yoga = createYoga<ServerContext, UserContext>({
         uploadOrgImage: ['file'],
         uploadUserAsset: ['file'],
         uploadUserImage: ['file']
-      } as ExcludedArgs,
+      } satisfies ExcludedArgs,
       includeOps: new Set([
         'acceptRequestToJoinDomain',
         'acceptTeamInvitation',
         'addApprovedOrganizationDomains',
-        'addAtlassianAuth',
-        'addGitHubAuth',
         'addIntegrationProvider',
         'addSlackAuth',
         'addTeamMemberIntegrationAuth',
+        'archiveOrganization',
+        'archiveTeam',
         'assignSAMLIdToOrg',
         'changeEmailDomain',
         'createImposterToken',
         'createOAuth1AuthorizeUrl',
+        'createOAuthAPIProvider',
+        'createPersonalAccessToken',
+        'createStripeSubscription',
+        'deleteOAuthAPIProvider',
         'deleteUser',
         'denyPushInvitation',
+        'disconnectSAML',
+        'downgradeToStarter',
+        'dumpHeap',
         'emailPasswordReset',
+        'exportPagesToConfluence',
         'hardDeleteUser',
         'invalidateSessions',
         'inviteToTeam',
@@ -118,20 +176,21 @@ export const yoga = createYoga<ServerContext, UserContext>({
         'moveTeamToOrg',
         'promoteToTeamLead',
         'pushInvitation',
+        'regenerateOAuthAPIProviderSecret',
         'removeAllSlackAuths',
         'removeApprovedOrganizationDomains',
-        'removeAtlassianAuth',
         'removeAuthIdentity',
         'removeFeatureFlagOwner',
-        'removeGitHubAuth',
         'removeIntegrationProvider',
         'removeOrgUsers',
         'removeSlackAuth',
         'removeTeamMember',
         'removeTeamMemberIntegrationAuth',
+        'requestSAMLMetadataChange',
         'resetPassword',
         'setOrgUserRole',
         'setOrganizationDomain',
+        'signOut',
         'signUpWithPassword',
         'stripeUpdateCreditCard',
         'toggleAIFeatures',
@@ -141,10 +200,13 @@ export const yoga = createYoga<ServerContext, UserContext>({
         'updateAutoJoin',
         'updateCreditCard',
         'updateEmail',
-        'updateFeatureFlag',
         'updateIntegrationProvider',
+        'updateIntegrationRepoAccess',
+        'updateOAuthAPIProvider',
         'updatePageAccess',
+        'updatePersonalAccessToken',
         'updateSAML',
+        'updateSCIM',
         'updateUserProfile',
         'uploadIdPMetadata',
         'uploadOrgImage',
@@ -152,26 +214,11 @@ export const yoga = createYoga<ServerContext, UserContext>({
         'uploadUserImage',
         'verifyDomain',
         'verifyEmail'
-      ] as ExcludedOps)
+      ] satisfies ExcludedOps)
     }),
-    useDatadogTracing({
-      excludeArgs: {
-        acceptTeamInvitation: ['invitationToken'],
-        loginWithPassword: ['password'],
-        resetPassword: ['token', 'newPassword'],
-        signUpWithPassword: ['password', 'invitationToken'],
-        verifyEmail: ['verificationToken']
-      } as ExcludedArgs,
-      hooks: {
-        execute: (span, args) => {
-          const userId = args.contextValue.authToken?.sub
-          if (userId) {
-            span.setTag('userId', userId)
-          }
-        }
-      },
-      collapse: true
-    }),
+    useErrorLogging(),
+    ...(TRACING_ENABLED ? [useTracing()] : []),
+    ...(ENABLE_METRICS ? [useVendorWait(), graphqlPrometheusPlugin] : []),
     useDeferStream(),
     usePersistedOperations({
       async allowArbitraryOperations(request) {
@@ -180,16 +227,31 @@ export const yoga = createYoga<ServerContext, UserContext>({
         const headerToken = authHeader?.slice(7)
         const cookieToken = getAuthTokenFromCookie(headers.get('cookie'))
         const token = headerToken || cookieToken
-        const authToken = getVerifiedAuthToken(token)
+        const authToken = getVerifiedAuthToken(token, false)
+
         const isSuperUser = authToken?.rol === 'su'
-        return isSuperUser
+        const isPAT = headerToken?.startsWith(PAT_PREFIX) ?? false
+        return isSuperUser || isPAT
       },
       skipDocumentValidation: true,
       extractPersistedOperationId,
       getPersistedOperation
     }),
-    usePrivateSchemaForSuperUser,
-    useDisposeDataloader,
+    useCheckBlacklist(),
+    useExtendedValidation({
+      rules: [OneOfInputObjectsRule],
+      onValidationFailed: (params) => {
+        const {operationName, variableValues, document} = params.args
+        const query = print(document)
+        Logger.warn(`Failed validation: ${operationName}`, {
+          extras: {
+            operationName,
+            query,
+            variableValues
+          }
+        })
+      }
+    }),
     useReadinessCheck({
       check: async () => {
         const isUnavailable = getIsShuttingDown() || getIsBusy()
@@ -201,9 +263,7 @@ export const yoga = createYoga<ServerContext, UserContext>({
     }),
     useCookies()
   ],
-  // There is a bug in graphql-yoga where calling `yoga.getEnveloped` does not work from within graphql-ws when `schema` returns a function
-  // As a workaround, we set the schema via `usePrivateSchemaForSuperUser` using the `onEnveloped` hook
-  schema: rootSchema,
+  schema: ({authToken}) => (authToken?.rol === 'su' ? getFullSchema() : rootSchema),
 
   context: () => {
     const rateLimiter = getRateLimiter()

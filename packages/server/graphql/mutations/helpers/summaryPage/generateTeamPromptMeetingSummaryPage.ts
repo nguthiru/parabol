@@ -5,7 +5,7 @@ import {getInsightsBlocks} from './getInsightsBlocks'
 import {getSubtitleBlock} from './getSubtitleBlock'
 import {getTeamPromptBlocks} from './getTeamPromptBlocks'
 import {getTeamPromptMetaBlock} from './getTeamPromptMetaBlock'
-import {getTitleBlock} from './getTitleBlock'
+import {getTeamPromptSummaryTable} from './getTeamPromptSummaryTable'
 
 export const generateTeamPromptMeetingSummaryPage = async function* (
   meetingId: string,
@@ -15,11 +15,11 @@ export const generateTeamPromptMeetingSummaryPage = async function* (
   const meeting = (await dataLoader.get('newMeetings').loadNonNull(meetingId)) as PokerMeeting
   // start the work at the same time, then deliver it in order
   const promises = [
-    getTitleBlock(meeting),
     getSubtitleBlock(meeting, dataLoader),
     getTeamPromptMetaBlock(meeting, dataLoader),
     getInsightsBlocks(meetingId, dataLoader),
-    getTeamPromptBlocks(meetingId, dataLoader)
+    getTeamPromptBlocks(meetingId, dataLoader),
+    getTeamPromptSummaryTable(meetingId, dataLoader)
   ] as Promise<JSONContent[] | null>[]
   for (const promise of promises) {
     const blocks = await promise

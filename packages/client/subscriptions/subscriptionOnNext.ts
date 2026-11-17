@@ -1,13 +1,12 @@
-import type {RouterProps} from 'react-router'
 import type Atmosphere from '../Atmosphere'
-import type {OnNextHandler} from '../types/relayMutations'
+import type {NavigateFn, OnNextHandler} from '../types/relayMutations'
 
 const subscriptionOnNext =
   (
     subscriptionName: string,
     onNextHandlers: Record<string, OnNextHandler<any, any>>,
     atmosphere: Atmosphere,
-    router: {history: RouterProps['history']}
+    router: {navigate: NavigateFn}
   ) =>
   (result: any) => {
     if (!result) return
@@ -15,10 +14,10 @@ const subscriptionOnNext =
     if (!payload) return
     const {fieldName} = payload
     const field = payload[fieldName]
+    // the server nulls a payload it failed to resolve
     if (!field) {
-      /* this happens when an onNextHandler exists
-      but there is no matching fragment in the GQL subscription query. */
       console.error('Notification Subscription Payload received without field:', fieldName)
+      return
     }
     const handler = onNextHandlers[fieldName]
     handler?.(field, {...router, atmosphere})

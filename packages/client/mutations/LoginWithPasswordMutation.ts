@@ -2,7 +2,7 @@ import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import {handleSuccessfulLogin} from '~/utils/handleSuccessfulLogin'
 import type {LoginWithPasswordMutation as TLoginWithPasswordMutation} from '../__generated__/LoginWithPasswordMutation.graphql'
-import type {HistoryLocalHandler, StandardMutation} from '../types/relayMutations'
+import type {NavigateLocalHandler, StandardMutation} from '../types/relayMutations'
 import {handleAcceptTeamInvitationErrors} from './AcceptTeamInvitationMutation'
 import handleAuthenticationRedirect from './handlers/handleAuthenticationRedirect'
 
@@ -14,7 +14,7 @@ const mutation = graphql`
     $isInvitation: Boolean!
   ) {
     loginWithPassword(email: $email, password: $password) {
-      error {
+      userErrors {
         message
       }
       ...handleSuccessfulLogin_UserLogInPayload @relay(mask: false)
@@ -27,22 +27,22 @@ const mutation = graphql`
 
 const LoginWithPasswordMutation: StandardMutation<
   TLoginWithPasswordMutation,
-  HistoryLocalHandler
-> = (atmosphere, variables, {onError, onCompleted, history}) => {
+  NavigateLocalHandler
+> = (atmosphere, variables, {onError, onCompleted, navigate}) => {
   return commitMutation<TLoginWithPasswordMutation>(atmosphere, {
     mutation,
     variables,
     onError,
     onCompleted: (res, errors) => {
       const {acceptTeamInvitation, loginWithPassword} = res
-      const {error: uiError} = loginWithPassword
+      const [userError] = loginWithPassword.userErrors
       onCompleted({loginWithPassword}, errors)
       handleAcceptTeamInvitationErrors(atmosphere, acceptTeamInvitation)
-      if (!uiError && !errors) {
+      if (!userError && !errors) {
         handleSuccessfulLogin(atmosphere, loginWithPassword)
         handleAuthenticationRedirect(acceptTeamInvitation, {
           atmosphere,
-          history
+          navigate
         })
       }
     }

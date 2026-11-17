@@ -1,9 +1,9 @@
 """
-An activity that does not have a customizable template, e.g. standup, check-in
+An activity that does not have a customizable template, e.g. check-in
 """
 type FixedActivity implements MeetingTemplate {
   """
-  teamPrompt | action
+  The activity ID, always action
   """
   id: ID!
 
@@ -33,27 +33,27 @@ type FixedActivity implements MeetingTemplate {
   name: String!
 
   """
-  Always aGhostOrg
+  The org ID for fixed activities (always a placeholder ghost org)
   """
   orgId: ID!
 
   """
-  Always public
+  Sharing scope for fixed activities (always public)
   """
   scope: SharingScopeEnum!
 
   """
-  Always aGhostTeam
+  The team ID for fixed activities (always a placeholder ghost team)
   """
   teamId: ID!
 
   """
-  aGhostTeam
+  The placeholder ghost team for fixed activities
   """
   team: Team!
 
   """
-  teamPrompt | action
+  The meeting type, always action
   """
   type: MeetingTypeEnum!
   updatedAt: DateTime!

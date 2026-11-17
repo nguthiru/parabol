@@ -1,6 +1,6 @@
 import type TimelineEventTeamPromptCompleteModel from '../../../database/types/TimelineEventTeamPromptComplete'
+import type {TeamPromptMeeting} from '../../../postgres/types/Meeting'
 import type {TimelineEventTeamPromptCompleteResolvers} from '../resolverTypes'
-import {timelineEventInterfaceResolvers} from './TimelineEvent'
 
 export type TimelineEventTeamPromptCompleteSource = Pick<
   TimelineEventTeamPromptCompleteModel,
@@ -8,15 +8,8 @@ export type TimelineEventTeamPromptCompleteSource = Pick<
 >
 
 const TimelineEventTeamPromptComplete: TimelineEventTeamPromptCompleteResolvers = {
-  ...timelineEventInterfaceResolvers(),
-  __isTypeOf: ({type}) => type === 'TEAM_PROMPT_COMPLETE',
   meeting: async ({meetingId}, _args, {dataLoader}) => {
-    const meeting = await dataLoader.get('newMeetings').loadNonNull(meetingId)
-    if (meeting.meetingType !== 'teamPrompt') throw new Error('Invalid meetingId')
-    return meeting
-  },
-  team: ({teamId}, _args: unknown, {dataLoader}) => {
-    return dataLoader.get('teams').loadNonNull(teamId)
+    return dataLoader.get('newMeetings').loadNonNull<TeamPromptMeeting>(meetingId)
   }
 }
 

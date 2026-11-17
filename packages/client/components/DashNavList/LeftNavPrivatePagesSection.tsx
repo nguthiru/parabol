@@ -1,8 +1,8 @@
-import AddIcon from '@mui/icons-material/Add'
 import graphql from 'babel-plugin-relay/macro'
 import {useState} from 'react'
 import {useFragment} from 'react-relay'
-import {useHistory} from 'react-router'
+import {useNavigate} from 'react-router'
+import {Add as AddIcon} from '~/ui/icons'
 import type {LeftNavPrivatePagesSection_viewer$key} from '../../__generated__/LeftNavPrivatePagesSection_viewer.graphql'
 import {PageDropTarget} from '../../modules/pages/PageDropTarget'
 import {useCreatePageMutation} from '../../mutations/useCreatePageMutation'
@@ -55,7 +55,7 @@ export const LeftNavPrivatePagesSection = (props: Props) => {
   const lastPageId = edges.at(-1)?.node.id
   const canDropIn = draggingPageId && draggingPageId !== lastPageId
   const [execute, submitting] = useCreatePageMutation()
-  const history = useHistory()
+  const navigate = useNavigate()
   const addPrivatePage = (e: React.MouseEvent) => {
     // the parent will toggle show/hide
     e.stopPropagation()
@@ -67,7 +67,7 @@ export const LeftNavPrivatePagesSection = (props: Props) => {
         const {page} = createPage
         const {id} = page
         const [_, pageCode] = id.split(':')
-        history.push(`/pages/${pageCode}`)
+        navigate(`/pages/${pageCode}`)
       }
     })
   }
@@ -82,7 +82,7 @@ export const LeftNavPrivatePagesSection = (props: Props) => {
         data-drop-in={canDropIn ? '' : undefined}
         className={cn(
           'group flex flex-1 cursor-pointer items-center rounded-md py-0.5 pl-3 font-semibold text-xs leading-5',
-          !draggingPageId && 'hover:bg-slate-300'
+          !draggingPageId && 'hover:bg-surface-nav-hover'
         )}
       >
         <LeftNavHeader>{'Private Pages'}</LeftNavHeader>

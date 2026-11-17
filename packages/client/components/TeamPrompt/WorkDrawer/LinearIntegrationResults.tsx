@@ -1,6 +1,7 @@
 import graphql from 'babel-plugin-relay/macro'
+import {useEffect} from 'react'
 import {type PreloadedQuery, usePaginationFragment, usePreloadedQuery} from 'react-relay'
-import {Link} from 'react-router-dom'
+import {Link} from 'react-router'
 import halloweenRetrospectiveTemplate from '../../../../../static/images/illustrations/halloweenRetrospectiveTemplate.png'
 import type {LinearIntegrationResults_query$key} from '../../../__generated__/LinearIntegrationResults_query.graphql'
 import type {LinearIntegrationResultsPaginationQuery} from '../../../__generated__/LinearIntegrationResultsPaginationQuery.graphql'
@@ -12,10 +13,12 @@ import LinearObjectCard from './LinearObjectCard'
 interface Props {
   queryRef: PreloadedQuery<LinearIntegrationResultsQuery>
   teamId: string
+  searchQuery: string
+  onResultCount: (searchQuery: string, count: number) => void
 }
 
 const LinearIntegrationResults = (props: Props) => {
-  const {queryRef, teamId} = props
+  const {queryRef, teamId, searchQuery, onResultCount} = props
 
   const queryData = usePreloadedQuery<LinearIntegrationResultsQuery>(
     graphql`
@@ -94,9 +97,16 @@ const LinearIntegrationResults = (props: Props) => {
   const linearIssues = linear?.api?.query?.issues?.edges?.map((edge) => edge?.node)
   const errors = linear?.api?.errors ?? null
 
+  // Report how many issues this search returned so the parent can hide the AI draft UI
+  // when there's no work to draft from.
+  const resultCount = linearIssues?.length ?? 0
+  useEffect(() => {
+    onResultCount(searchQuery, resultCount)
+  }, [searchQuery, resultCount, onResultCount])
+
   return (
     <>
-      <div className='flex h-full flex-col gap-y-2 overflow-auto px-4'>
+      <div className='flex flex-col gap-y-2 px-4'>
         {linearIssues && linearIssues.length > 0 ? (
           linearIssues.map((issue) => {
             if (!issue) {
@@ -106,20 +116,20 @@ const LinearIntegrationResults = (props: Props) => {
             return <LinearObjectCard key={issue.id} issueRef={issue} />
           })
         ) : (
-          <div className='-mt-14 flex h-full flex-col items-center justify-center text-center'>
+          <div className='flex flex-col items-center pt-12 text-center'>
             <img
               className='w-20'
               src={halloweenRetrospectiveTemplate}
               alt='No results illustration'
             />
-            <div className='mt-7 w-2/3 text-gray-600 text-sm dark:text-gray-400'>
+            <div className='mt-7 w-2/3 text-fg-secondary text-sm'>
               {errors?.[0]?.message
                 ? `Error fetching Linear issues: ${errors[0].message}`
                 : `Looks like no Linear issues match your filter.`}
             </div>
             <Link
               to={`/team/${teamId}/integrations`}
-              className='mt-4 font-semibold text-sky-500 hover:text-sky-400'
+              className='mt-4 font-semibold text-accent hover:text-sky-400'
             >
               Review Linear integration settings
             </Link>

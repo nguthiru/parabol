@@ -1,57 +1,34 @@
-import styled from '@emotion/styled'
 import type * as React from 'react'
-import type {RouteComponentProps} from 'react-router'
+import {useNavigate, useParams} from 'react-router'
 import useCanonical from '~/hooks/useCanonical'
 import useAtmosphere from '../../hooks/useAtmosphere'
 import useForm from '../../hooks/useForm'
 import useMutationProps from '../../hooks/useMutationProps'
 import ResetPasswordMutation from '../../mutations/ResetPasswordMutation'
+import {Security} from '../../types/constEnums'
+import {Button} from '../../ui/Button/Button'
 import Legitity from '../../validation/Legitity'
 import AuthenticationDialog from '../AuthenticationDialog'
 import DialogTitle from '../DialogTitle'
 import ErrorAlert from '../ErrorAlert/ErrorAlert'
 import PasswordInputField from '../PasswordInputField'
-import PrimaryButton from '../PrimaryButton'
 import TeamInvitationWrapper from '../TeamInvitationWrapper'
-
-interface Props extends RouteComponentProps<{token: string}> {}
-
-const Form = styled('form')({
-  display: 'flex',
-  flexDirection: 'column'
-})
-
-const P = styled('p')({
-  fontSize: 14,
-  lineHeight: 1.5,
-  margin: '16px 0',
-  textAlign: 'center'
-})
-
-const Container = styled('div')({
-  margin: '0 auto',
-  maxWidth: 240,
-  width: '100%'
-})
-
-const SubmitButton = styled(PrimaryButton)({
-  marginTop: 16
-})
 
 const validatePassword = (password: string) => {
   return new Legitity(password)
     .required('Please enter a password')
-    .min(6, '6 character minimum')
+    .min(Security.MIN_PASSWORD_LENGTH, `${Security.MIN_PASSWORD_LENGTH} character minimum`)
     .max(1000, `That's a book, not a password`)
 }
 
-const SetNewPassword = (props: Props) => {
-  const {history, match} = props
-  const {params} = match
-  const {token} = params
+const SetNewPassword = () => {
+  const navigate = useNavigate()
+  const {token} = useParams()
   const atmosphere = useAtmosphere()
   useCanonical('reset-password')
-  const {onCompleted, onError, error, submitting, submitMutation} = useMutationProps()
+  const {onCompleted, onError, error, submitting, submitMutation} = useMutationProps({
+    errorDisplay: 'inline'
+  })
   const {fields, onChange, setDirtyField, validateField} = useForm({
     password: {
       getDefault: () => '',
@@ -73,27 +50,38 @@ const SetNewPassword = (props: Props) => {
     if (passwordRes.error) return
     const {value: newPassword} = passwordRes
     submitMutation()
-    ResetPasswordMutation(atmosphere, {newPassword, token}, {onError, onCompleted, history})
+    ResetPasswordMutation(
+      atmosphere,
+      {newPassword, token: token!},
+      {onError, onCompleted, navigate}
+    )
   }
   return (
     <TeamInvitationWrapper>
       <AuthenticationDialog>
         <DialogTitle>{'Reset Password'}</DialogTitle>
-        <Container>
-          <P>{'Type your new password below'}</P>
+        <div className='mx-auto w-full max-w-[240px]'>
+          <p className='my-4 text-center text-[14px] leading-normal'>
+            {'Type your new password below'}
+          </p>
           {error && <ErrorAlert message={error.message} />}
-          <Form onSubmit={onSubmit}>
+          <form className='flex flex-col' onSubmit={onSubmit}>
             <PasswordInputField
               {...fields.password}
               autoFocus
               onChange={onChange}
               onBlur={handleBlur}
             />
-            <SubmitButton size='medium' waiting={submitting}>
+            <Button
+              variant='primary'
+              className='mt-4 h-10 text-[15px]'
+              size='md'
+              disabled={submitting}
+            >
               {'Reset Password'}
-            </SubmitButton>
-          </Form>
-        </Container>
+            </Button>
+          </form>
+        </div>
       </AuthenticationDialog>
     </TeamInvitationWrapper>
   )

@@ -1,62 +1,59 @@
-import {fetch} from '@whatwg-node/fetch'
-import base64url from 'base64url'
 import {GraphQLError} from 'graphql'
-import {type NotNull, sql} from 'kysely'
+import {sql} from 'kysely'
 import ms from 'ms'
 import DomainJoinRequestId from 'parabol-client/shared/gqlIds/DomainJoinRequestId'
 import MeetingMemberId from 'parabol-client/shared/gqlIds/MeetingMemberId'
+import MeetingSeriesId from 'parabol-client/shared/gqlIds/MeetingSeriesId'
 import isTaskPrivate from 'parabol-client/utils/isTaskPrivate'
 import {isNotNull} from 'parabol-client/utils/predicates'
 import toTeamMemberId from 'parabol-client/utils/relay/toTeamMemberId'
 import sortByTier from 'parabol-client/utils/sortByTier'
-import TeamMemberId from '../../../../client/shared/gqlIds/TeamMemberId'
-import {positionBefore} from '../../../../client/shared/sortOrder'
 import {
   AUTO_GROUPING_THRESHOLD,
   MAX_REDUCTION_PERCENTAGE,
   MAX_RESULT_GROUP_SIZE
 } from '../../../../client/utils/constants'
 import groupReflections from '../../../../client/utils/smartGroup/groupReflections'
+import {
+  activeEmbeddingDefinition,
+  activeEmbeddingModelId
+} from '../../../../embedder/activeEmbeddingModel'
+import {getEmbeddingsTableName} from '../../../../embedder/getEmbeddingsTableName'
+import {numberVectorToString} from '../../../../embedder/indexing/numberVectorToString'
 import type MeetingTemplate from '../../../database/types/MeetingTemplate'
+import {validateOAuthAuthorizationRequest} from '../../../oauth2/validateOAuthAuthorizationRequest'
 import getKysely from '../../../postgres/getKysely'
 import {
   selectNewMeetings,
   selectNotifications,
-  selectPages,
+  selectPersonalAccessToken,
   selectTasks
 } from '../../../postgres/select'
 import {getUserId, isSuperUser, isTeamMember} from '../../../utils/authorization'
-import {CipherId} from '../../../utils/CipherId'
+import type {FeatureFlagName} from '../../../utils/featureFlags'
 import getDomainFromEmail from '../../../utils/getDomainFromEmail'
 import getMonthlyStreak from '../../../utils/getMonthlyStreak'
-import {getSSOMetadataFromURL} from '../../../utils/getSSOMetadataFromURL'
+import getSAMLURLFromEmail from '../../../utils/getSAMLURLFromEmail'
+import getUserDetail from '../../../utils/getUserDetail'
 import {getUserSocketCount} from '../../../utils/getUserSocketCount'
 import logError from '../../../utils/logError'
 import standardError from '../../../utils/standardError'
 import errorFilter from '../../errorFilter'
 import type {DataLoaderWorker} from '../../graphql'
 import isValid from '../../isValid'
+import canReadMeetingSeries from '../../mutations/helpers/canReadMeetingSeries'
+import {getUserQueryJobData, publishToEmbedder} from '../../mutations/helpers/publishToEmbedder'
 import connectionFromTasks from '../../queries/helpers/connectionFromTasks'
 import connectionFromTemplateArray from '../../queries/helpers/connectionFromTemplateArray'
 import {aiPrompts} from '../fields/aiPrompts'
 import {invoices} from '../fields/invoices'
 import {pageInsights} from '../fields/pageInsights'
-import getSignOnURL from '../mutations/helpers/SAMLHelpers/getSignOnURL'
+import {pages} from '../fields/pages'
+import {search} from '../fields/search'
+import type {ResourceGrants} from '../ResourceGrants'
 import type {ReqResolvers} from './ReqResolvers'
 
-const MODEL = 'Embeddings_ember_1'
-const EMBED_URL = (() => {
-  try {
-    const availableModels =
-      process.env.AI_EMBEDDING_MODELS && JSON.parse(process.env.AI_EMBEDDING_MODELS)
-    return availableModels.find(
-      ({model}: {model?: string}) => model?.split(':')[1] === 'llmrails/ember-v1'
-    )?.url
-  } catch {
-    return undefined
-  }
-})()
-const SIMILARITY_THRESHOLD = 0.5
+const TEMPLATE_SEARCH_LIMIT = 12
 
 const getValidUserIds = async (
   userIds: null | string[] | undefined,
@@ -79,26 +76,25 @@ const getValidUserIds = async (
   return userIds.filter((userId) => teamMemberUserIds.has(userId))
 }
 
+const filterGrantedOrgIds = async (orgIds: string[], resourceGrants?: ResourceGrants) => {
+  if (!resourceGrants) return orgIds
+  const isOrgGranted = await Promise.all(orgIds.map((orgId) => resourceGrants.hasOrg(orgId)))
+  return orgIds.filter((_, idx) => isOrgGranted[idx])
+}
+
 const User: ReqResolvers<'User'> = {
-  organization: async (_source, {orgId}, {authToken, dataLoader}) => {
-    const viewerId = getUserId(authToken)
-    const [organization, viewerOrganizationUser] = await Promise.all([
-      dataLoader.get('organizations').loadNonNull(orgId),
-      dataLoader.get('organizationUsersByUserIdOrgId').load({userId: viewerId, orgId})
-    ])
-    if (!isSuperUser(authToken) && !viewerOrganizationUser) return null
-    return organization
+  organization: (_source, {orgId}, {dataLoader}) => {
+    return dataLoader.get('organizations').loadNonNull(orgId)
   },
   invoices,
+  freeCustomRetroTemplatesRemaining: ({id: userId}, _args, {dataLoader}) =>
+    getUserDetail(userId, 'freeCustomRetroTemplatesRemaining', dataLoader),
+  freeCustomPokerTemplatesRemaining: ({id: userId}, _args, {dataLoader}) =>
+    getUserDetail(userId, 'freeCustomPokerTemplatesRemaining', dataLoader),
+  freeCustomStandupTemplatesRemaining: ({id: userId}, _args, {dataLoader}) =>
+    getUserDetail(userId, 'freeCustomStandupTemplatesRemaining', dataLoader),
   archivedTasks: async (_source, {first, after, teamId}, {authToken}) => {
-    // AUTH
     const userId = getUserId(authToken)
-    if (!isTeamMember(authToken, teamId)) {
-      standardError(new Error('Not organization lead'), {userId})
-      return null
-    }
-
-    // RESOLUTION
     const tasks = await selectTasks()
       .where('teamId', '=', teamId)
       .$if(!!after, (qb) => qb.where('updatedAt', '<=', after!))
@@ -126,16 +122,7 @@ const User: ReqResolvers<'User'> = {
   },
   archivedTasksCount: async (_source, {teamId}, {authToken}) => {
     const pg = getKysely()
-    const viewerId = getUserId(authToken)
-
-    // AUTH
     const userId = getUserId(authToken)
-    if (!isTeamMember(authToken, teamId)) {
-      standardError(new Error('Team not found'), {userId: viewerId})
-      return 0
-    }
-
-    // RESOLUTION
     const taskCount = await pg
       .selectFrom('Task')
       .select(({fn}) => fn.count('id').as('count'))
@@ -145,31 +132,26 @@ const User: ReqResolvers<'User'> = {
       .executeTakeFirstOrThrow()
     return Number(taskCount.count)
   },
-  meeting: async (_source, {meetingId}, {authToken, dataLoader}) => {
-    const viewerId = getUserId(authToken)
-    const meeting = await dataLoader.get('newMeetings').load(meetingId)
-    if (!meeting) {
-      standardError(new Error('Meeting not found'), {
-        userId: viewerId,
-        tags: {meetingId}
-      })
-      return null
-    }
-    const {teamId} = meeting
-    if (!isTeamMember(authToken, teamId)) {
-      const meetingMemberId = toTeamMemberId(meetingId, viewerId)
-      const meetingMember = await dataLoader.get('meetingMembers').load(meetingMemberId)
-      if (!meetingMember) {
-        // standardError(new Error('Team not found'), {userId: viewerId, tags: {teamId}})
-        return null
-      }
-    }
-    return meeting
+  meeting: async (_source, {meetingId}, {dataLoader}) => {
+    return (await dataLoader.get('newMeetings').load(meetingId)) ?? null
+  },
+  meetingSeries: async (_source, {meetingSeriesId}, {authToken, dataLoader, resourceGrants}) => {
+    const numericId = MeetingSeriesId.split(meetingSeriesId)
+    if (!Number.isFinite(numericId)) return null
+    const meetingSeries = await dataLoader.get('meetingSeries').load(numericId)
+    if (!meetingSeries) return null
+    const isReadable = await canReadMeetingSeries(
+      meetingSeries,
+      authToken,
+      dataLoader,
+      resourceGrants
+    )
+    return isReadable ? meetingSeries : null
   },
   meetings: async (
     _source,
     {after, first, teamIds, meetingTypes, before},
-    {authToken, dataLoader}
+    {authToken, dataLoader, resourceGrants}
   ) => {
     const viewerId = getUserId(authToken)
     let validTeamIds = teamIds
@@ -178,6 +160,10 @@ const User: ReqResolvers<'User'> = {
       const allTeamIds = teamMembers.map(({teamId}) => teamId)
       validTeamIds = teamIds.filter((teamId) => allTeamIds.includes(teamId))
     }
+    if (resourceGrants) {
+      const grantChecks = await Promise.all(validTeamIds.map((id) => resourceGrants.hasTeam(id)))
+      validTeamIds = validTeamIds.filter((_, i) => grantChecks[i])
+    }
     if (validTeamIds.length < 1) {
       return {
         edges: [],
@@ -185,14 +171,16 @@ const User: ReqResolvers<'User'> = {
       }
     }
     if (meetingTypes.length < 1) {
-      throw new GraphQLError('Must provide at least 1 meetingType')
+      throw new GraphQLError('Must provide at least 1 meetingType', {
+        extensions: {code: 'BAD_USER_INPUT'}
+      })
     }
 
     const nodes = await selectNewMeetings()
       .where('teamId', 'in', validTeamIds)
       .where('meetingType', 'in', meetingTypes)
-      .$if(!!after, (qb) => qb.where('createdAt', '>=', after!))
-      .$if(!!before, (qb) => qb.where('createdAt', '<=', before!))
+      .$if<{}>(!!after, (qb) => qb.where('createdAt', '>=', after!))
+      .$if<{}>(!!before, (qb) => qb.where('createdAt', '<=', before!))
       .limit(first + 1)
       .execute()
     return {
@@ -235,7 +223,7 @@ const User: ReqResolvers<'User'> = {
   tasks: async (
     _source,
     {first, after, userIds, teamIds, archived, statusFilters, filterQuery, includeUnassigned},
-    {authToken, dataLoader}
+    {authToken, dataLoader, resourceGrants}
   ) => {
     // AUTH
     const viewerId = getUserId(authToken)
@@ -262,9 +250,13 @@ const User: ReqResolvers<'User'> = {
     // if archived is true & no userId filter is provided, it should include tasks for ex-team members
     // under no condition should it show tasks for archived teams
     const accessibleTeamIds = authToken.tms
-    const validTeamIds = teamIds
+    let validTeamIds = teamIds
       ? teamIds.filter((teamId: string) => accessibleTeamIds.includes(teamId))
       : accessibleTeamIds
+    if (resourceGrants) {
+      const grantChecks = await Promise.all(validTeamIds.map((id) => resourceGrants.hasTeam(id)))
+      validTeamIds = validTeamIds.filter((_, i) => grantChecks[i])
+    }
     const validUserIds = (await getValidUserIds(userIds, viewerId, validTeamIds, dataLoader)) ?? []
     // RESOLUTION
     const tasks = await dataLoader.get('userTasks').load({
@@ -283,22 +275,7 @@ const User: ReqResolvers<'User'> = {
     })
     return connectionFromTasks(filteredTasks, first)
   },
-  team: async (_source, {teamId}, {authToken, dataLoader}, {operation}) => {
-    // HANDLED_OPS is a list of operations that we gracefully handle on the client, so we don't want to report them the error tracking
-    const HANDLED_OPS = ['TeamRootQuery', 'TeamContainerQuery']
-    const team = await dataLoader.get('teams').loadNonNull(teamId)
-    const {orgId} = team
-    const viewerId = getUserId(authToken)
-    const {role} =
-      (await dataLoader.get('organizationUsersByUserIdOrgId').load({userId: viewerId, orgId})) ?? {}
-    const isOrgAdmin = role === 'ORG_ADMIN'
-    if (!isOrgAdmin && !isTeamMember(authToken, teamId) && !isSuperUser(authToken)) {
-      const viewerId = getUserId(authToken)
-      if (!HANDLED_OPS.includes(operation?.name?.value ?? '')) {
-        standardError(new Error('Team not found'), {userId: viewerId})
-      }
-      return null
-    }
+  team: (_source, {teamId}, {dataLoader}) => {
     return dataLoader.get('teams').loadNonNull(teamId)
   },
   createdAt: ({createdAt}) => createdAt || new Date('2016-06-01'),
@@ -363,7 +340,7 @@ const User: ReqResolvers<'User'> = {
   timeline: async (
     {id},
     {after, first, teamIds, eventTypes, archived},
-    {authToken, dataLoader}
+    {authToken, dataLoader, resourceGrants}
   ) => {
     const viewerId = getUserId(authToken)
 
@@ -387,9 +364,13 @@ const User: ReqResolvers<'User'> = {
     }
     const userTeamMembers = await dataLoader.get('teamMembersByUserId').load(viewerId)
     const accessibleTeamIds = userTeamMembers.map(({teamId}) => teamId)
-    const validTeamIds = teamIds
+    let validTeamIds = teamIds
       ? teamIds.filter((teamId: string) => accessibleTeamIds.includes(teamId))
       : accessibleTeamIds
+    if (resourceGrants) {
+      const grantChecks = await Promise.all(validTeamIds.map((id) => resourceGrants.hasTeam(id)))
+      validTeamIds = validTeamIds.filter((_, i) => grantChecks[i])
+    }
     if (validTeamIds.length === 0)
       return {
         error: 'No teams',
@@ -438,63 +419,61 @@ const User: ReqResolvers<'User'> = {
     }
   },
 
-  discussion: async (_source, {id}, {authToken, dataLoader}) => {
-    const discussion = await dataLoader.get('discussions').load(id)
-    if (!discussion) return null
-    const {teamId} = discussion
-    if (!isTeamMember(authToken, teamId)) {
-      return null
-    }
-    return discussion
+  discussion: async (_source, {id}, {dataLoader}) => {
+    return (await dataLoader.get('discussions').load(id)) ?? null
   },
 
   newFeature: ({newFeatureId}, _args, {dataLoader}) => {
     return newFeatureId ? dataLoader.get('newFeatures').loadNonNull(newFeatureId) : null
   },
 
-  lastSeenAtURLs: () => [],
-
   meetingMember: async ({id: userId}, {meetingId}, {dataLoader}) => {
     const meetingMemberId = toTeamMemberId(meetingId, userId)
     return meetingId ? dataLoader.get('meetingMembers').loadNonNull(meetingMemberId) : null
   },
 
-  organizationUser: async ({id: userId}, {orgId}, {authToken, dataLoader}) => {
-    const viewerId = getUserId(authToken)
-    const [viewerOrganizationUser, userOrganizationUser] = await Promise.all([
-      dataLoader.get('organizationUsersByUserIdOrgId').load({userId: viewerId, orgId}),
-      dataLoader.get('organizationUsersByUserIdOrgId').load({userId, orgId})
-    ])
-    if (viewerOrganizationUser || isSuperUser(authToken)) return userOrganizationUser
-    return null
+  organizationUser: async ({id: userId}, {orgId}, {dataLoader}) => {
+    return (await dataLoader.get('organizationUsersByUserIdOrgId').load({userId, orgId})) ?? null
   },
 
-  organizationUsers: async ({id: userId}, _args, {authToken, dataLoader}) => {
+  organizationUsers: async ({id: userId}, _args, {authToken, dataLoader, resourceGrants}) => {
     const viewerId = getUserId(authToken)
     const organizationUsers = await dataLoader.get('organizationUsersByUserId').load(userId)
     organizationUsers.sort((a, b) => (a.orgId > b.orgId ? 1 : -1))
-    if (viewerId === userId || isSuperUser(authToken)) {
-      return organizationUsers
+    let visibleOrgUsers = organizationUsers
+    if (viewerId !== userId && !isSuperUser(authToken)) {
+      const viewerOrganizationUsers = await dataLoader
+        .get('organizationUsersByUserId')
+        .load(viewerId)
+      const viewerOrgIds = new Set(viewerOrganizationUsers.map(({orgId}) => orgId))
+      visibleOrgUsers = organizationUsers.filter(({orgId}) => viewerOrgIds.has(orgId))
     }
-    const viewerOrganizationUsers = await dataLoader.get('organizationUsersByUserId').load(viewerId)
-    const viewerOrgIds = viewerOrganizationUsers.map(({orgId}) => orgId)
-    return organizationUsers.filter((organizationUser) =>
-      viewerOrgIds.includes(organizationUser.orgId)
-    )
+    if (resourceGrants) {
+      const grantChecks = await Promise.all(
+        visibleOrgUsers.map(({orgId}) => resourceGrants.hasOrg(orgId))
+      )
+      visibleOrgUsers = visibleOrgUsers.filter((_, i) => grantChecks[i])
+    }
+    return visibleOrgUsers
   },
 
-  organizations: async ({id: userId}, _args, {authToken, dataLoader}) => {
+  organizations: async ({id: userId}, _args, {authToken, dataLoader, resourceGrants}) => {
     const organizationUsers = await dataLoader.get('organizationUsersByUserId').load(userId)
     const orgIds = organizationUsers.map(({orgId}) => orgId)
     const organizations = (await dataLoader.get('organizations').loadMany(orgIds)).filter(isValid)
     const sortedOrgs = sortByTier(organizations)
     const viewerId = getUserId(authToken)
-    if (viewerId === userId || isSuperUser(authToken)) {
-      return sortedOrgs
+    let visibleOrgs = sortedOrgs
+    if (viewerId !== userId && !isSuperUser(authToken)) {
+      const viewerOrganizationUsers = await dataLoader
+        .get('organizationUsersByUserId')
+        .load(viewerId)
+      const viewerOrgIds = new Set(viewerOrganizationUsers.map(({orgId}) => orgId))
+      visibleOrgs = sortedOrgs.filter(({id}) => viewerOrgIds.has(id))
     }
-    const viewerOrganizationUsers = await dataLoader.get('organizationUsersByUserId').load(viewerId)
-    const viewerOrgIds = viewerOrganizationUsers.map(({orgId}) => orgId)
-    return sortedOrgs.filter((organization) => viewerOrgIds.includes(organization.id))
+    if (!resourceGrants) return visibleOrgs
+    const grantChecks = await Promise.all(visibleOrgs.map(({id}) => resourceGrants.hasOrg(id)))
+    return visibleOrgs.filter((_, i) => grantChecks[i])
   },
 
   overLimitCopy: async ({id: userId, overLimitCopy}, _args, {dataLoader}) => {
@@ -595,10 +574,9 @@ const User: ReqResolvers<'User'> = {
       if (!meeting) return {meetingId}
       teamId = meeting.teamId
     }
-    const teamMember = teamId
-      ? await dataLoader.get('teamMembers').load(TeamMemberId.join(teamId, viewerId))
-      : null
-    if (teamMember?.isNotRemoved) return {isOnTeam: true}
+    // the same teams the auth token lists, so a page that checks the token can't send the viewer straight back
+    const viewerTeamIds = await dataLoader.get('teamIdsByUserId').load(viewerId)
+    if (teamId && viewerTeamIds.includes(teamId)) return {isOnTeam: true}
     const teamInvitations = teamId
       ? await dataLoader.get('teamInvitationsByTeamId').load(teamId)
       : null
@@ -607,16 +585,20 @@ const User: ReqResolvers<'User'> = {
     return {teamInvitation, teamId, meetingId}
   },
 
-  teams: async ({id: userId}, {includeArchived}, {authToken, dataLoader}) => {
+  teams: async ({id: userId}, {includeArchived}, {authToken, dataLoader, resourceGrants}) => {
     const viewerId = getUserId(authToken)
-    const user = (await dataLoader.get('users').load(userId))!
+    const allTms = await dataLoader.get('teamIdsByUserId').load(userId)
     const activeTeamIds =
       viewerId === userId || isSuperUser(authToken)
-        ? user.tms
-        : user.tms.filter((teamId: string) => authToken.tms.includes(teamId))
-    const teamIds = includeArchived
+        ? allTms
+        : allTms.filter((teamId: string) => authToken.tms.includes(teamId))
+    let teamIds = includeArchived
       ? (await dataLoader.get('teamMembersByUserId').load(userId)).map(({teamId}) => teamId)
       : activeTeamIds
+    if (resourceGrants) {
+      const grantChecks = await Promise.all(teamIds.map((id) => resourceGrants.hasTeam(id)))
+      teamIds = teamIds.filter((_, i) => grantChecks[i])
+    }
     const teams = (
       await Promise.all(
         teamIds.map((teamId) => dataLoader.get('teamsWithUserSort').load({teamId, userId}))
@@ -627,76 +609,78 @@ const User: ReqResolvers<'User'> = {
     return teams
   },
 
-  teamMember: ({id}, {teamId, userId}, {authToken, dataLoader}) => {
-    if (!isTeamMember(authToken, teamId)) {
-      const viewerId = getUserId(authToken)
-      standardError(new Error('Not on team'), {userId: viewerId})
-      return null
-    }
+  teamMember: ({id}, {teamId, userId}, {dataLoader}) => {
     const teamMemberId = toTeamMemberId(teamId, userId || id)
     return dataLoader.get('teamMembers').loadNonNull(teamMemberId)
   },
 
-  tms: ({id: userId, tms}, _args, {authToken}) => {
+  tms: async ({id: userId}, _args, {authToken, dataLoader, resourceGrants}) => {
     const viewerId = getUserId(authToken)
-    return viewerId === userId
+    const tms = await dataLoader.get('teamIdsByUserId').load(userId)
+    return viewerId === userId && !resourceGrants
       ? tms
       : tms.filter((teamId: string) => authToken.tms.includes(teamId))
   },
 
-  userOnTeam: async (_source, {userId}, {authToken, dataLoader}) => {
-    const userOnTeam = await dataLoader.get('users').load(userId)
-    if (!userOnTeam) {
-      return null
-    }
-    // const teams = new Set(userOnTeam)
-    const {tms} = userOnTeam
-    if (!authToken.tms.find((teamId) => tms.includes(teamId))) return null
-    return userOnTeam
-  },
-  activity: async (_source, {activityId}, {dataLoader}) => {
+  activity: async (_source, {activityId}, {dataLoader, authToken, resourceGrants}) => {
+    const viewerId = getUserId(authToken)
+
     const activity = await dataLoader.get('meetingTemplates').load(activityId)
+    if (authToken.rol !== 'su') {
+      if (activity?.scope === 'TEAM' && !authToken.tms.includes(activity.teamId)) {
+        return null
+      }
+      if (activity?.scope === 'ORGANIZATION') {
+        const organizationUser = await dataLoader
+          .get('organizationUsersByUserIdOrgId')
+          .load({userId: viewerId, orgId: activity.orgId})
+        if (!organizationUser) {
+          return null
+        }
+        if (resourceGrants && !(await resourceGrants.hasOrg(activity.orgId))) return null
+      }
+    }
     return activity || null
   },
-  canAccess: async (_source, {entity, id}, {authToken, dataLoader}) => {
+  canAccess: async (_source, {entity, id}, {authToken, dataLoader, resourceGrants}) => {
     const viewerId = getUserId(authToken)
     switch (entity) {
-      case 'Team':
-        return isTeamMember(authToken, id)
+      case 'Team': {
+        if (!isTeamMember(authToken, id)) return false
+        if (resourceGrants && !(await resourceGrants.hasTeam(id))) return false
+        return true
+      }
       case 'Meeting': {
         const meeting = await dataLoader.get('newMeetings').load(id)
-        if (!meeting) {
-          return false
-        }
+        if (!meeting) return false
         const {teamId} = meeting
-        return isTeamMember(authToken, teamId)
+        if (!isTeamMember(authToken, teamId)) return false
+        if (resourceGrants && !(await resourceGrants.hasTeam(teamId))) return false
+        return true
       }
       case 'Organization': {
         const organizationUser = await dataLoader
           .get('organizationUsersByUserIdOrgId')
           .load({userId: viewerId, orgId: id})
-        return !!organizationUser
+        if (!organizationUser) return false
+        if (resourceGrants && !(await resourceGrants.hasOrg(id))) return false
+        return true
       }
       default:
         return false
     }
   },
-  company: async ({email}, _args, {authToken, dataLoader}) => {
+  company: async ({email}, _args, {dataLoader}) => {
     const domain = getDomainFromEmail(email)
-    if (
-      !domain ||
-      !isSuperUser(authToken) ||
-      !(await dataLoader.get('isCompanyDomain').load(domain))
-    ) {
-      return null
-    }
+    if (!domain || !(await dataLoader.get('isCompanyDomain').load(domain))) return null
     return {id: domain}
   },
-  domains: async ({id: userId}, _args, {dataLoader}) => {
+  domains: async ({id: userId}, _args, {dataLoader, resourceGrants}) => {
     const organizationUsers = await dataLoader.get('organizationUsersByUserId').load(userId)
-    const orgIds = organizationUsers
-      .filter(({suggestedTier}) => suggestedTier)
-      .map(({orgId}) => orgId)
+    const orgIds = await filterGrantedOrgIds(
+      organizationUsers.filter(({suggestedTier}) => suggestedTier).map(({orgId}) => orgId),
+      resourceGrants
+    )
 
     const organizations = await Promise.all(
       orgIds.map((orgId) => dataLoader.get('organizations').loadNonNull(orgId))
@@ -707,29 +691,60 @@ const User: ReqResolvers<'User'> = {
   domainJoinRequest: async ({email}, {requestId}, {dataLoader}) => {
     const request = await dataLoader
       .get('domainJoinRequests')
-      .loadNonNull(DomainJoinRequestId.split(requestId))
+      .load(DomainJoinRequestId.split(requestId))
     const domain = getDomainFromEmail(email)
-    if (domain !== request.domain) {
+    if (!request || domain !== request.domain) {
       return null
     }
     return request
   },
-  favoriteTemplates: async ({favoriteTemplateIds}, _args, {dataLoader}) => {
-    return (await dataLoader.get('meetingTemplates').loadMany(favoriteTemplateIds)).filter(isValid)
+  favoriteTemplates: async (
+    {favoriteTemplateIds},
+    _args,
+    {authToken, dataLoader, resourceGrants}
+  ) => {
+    const templates = (
+      await dataLoader.get('meetingTemplates').loadMany(favoriteTemplateIds)
+    ).filter(isValid)
+    const accessible = await Promise.all(
+      templates.map(async (template) => {
+        const {scope, teamId, orgId} = template
+        if (scope === 'PUBLIC') return true
+        if (scope === 'TEAM') return authToken.tms.includes(teamId)
+        if (scope === 'ORGANIZATION') {
+          const organizationUsers = await dataLoader
+            .get('organizationUsersByUserId')
+            .load(getUserId(authToken))
+          if (!organizationUsers.some((ou) => ou.orgId === orgId)) return false
+          return !resourceGrants || resourceGrants.hasOrg(orgId)
+        }
+        return false
+      })
+    )
+    return templates.filter((_, i) => accessible[i])
   },
   featureFlag: async ({id: userId}, {featureName}, {dataLoader}) => {
-    return await dataLoader.get('featureFlagByOwnerId').load({ownerId: userId, featureName})
+    return await dataLoader
+      .get('featureFlagByOwnerId')
+      .load({ownerId: userId, featureName: featureName as FeatureFlagName})
   },
-  availableTemplates: async ({id: userId}, {first, after, type}, {authToken, dataLoader}) => {
+  availableTemplates: async (
+    {id: userId},
+    {first, after, type},
+    {authToken, dataLoader, resourceGrants}
+  ) => {
     const viewerId = getUserId(authToken)
-    const user = await dataLoader.get('users').loadNonNull(userId)
+    const allTms = await dataLoader.get('teamIdsByUserId').load(userId)
     const teamIds =
-      viewerId === userId || isSuperUser(authToken)
-        ? user.tms
-        : user.tms.filter((teamId: string) => authToken.tms.includes(teamId))
+      (viewerId === userId && !resourceGrants) || isSuperUser(authToken)
+        ? allTms
+        : allTms.filter((teamId: string) => authToken.tms.includes(teamId))
 
     const organizationUsers = await dataLoader.get('organizationUsersByUserId').load(viewerId)
-    const userOrgIds = organizationUsers.map(({orgId}) => orgId)
+    const userOrgIds = await filterGrantedOrgIds(
+      organizationUsers.map(({orgId}) => orgId),
+      resourceGrants
+    )
     const availableOrgIds = ['aGhostOrg', ...userOrgIds]
     const [parabolActivities, ...userActivities] = await Promise.all(
       availableOrgIds.map((orgId) => dataLoader.get('meetingTemplatesByOrgId').load(orgId))
@@ -785,20 +800,22 @@ const User: ReqResolvers<'User'> = {
       }))
       .filter((activity) => !type || activity.type === type)
       .sort((a, b) => (a.sortOrder > b.sortOrder ? -1 : 1))
-
     return connectionFromTemplateArray(allActivities, first, after)
   },
-  templateSearch: async ({id: userId}, {search}, {authToken, dataLoader}) => {
-    if (!search || !EMBED_URL) return []
+  templateSearch: async ({id: userId}, {search}, {authToken, dataLoader, resourceGrants}) => {
+    if (!search) return []
     const viewerId = getUserId(authToken)
-    const user = await dataLoader.get('users').loadNonNull(userId)
+    const allTms = await dataLoader.get('teamIdsByUserId').load(userId)
     const teamIds =
-      viewerId === userId || isSuperUser(authToken)
-        ? user.tms
-        : user.tms.filter((teamId: string) => authToken.tms.includes(teamId))
+      (viewerId === userId && !resourceGrants) || isSuperUser(authToken)
+        ? allTms
+        : allTms.filter((teamId: string) => authToken.tms.includes(teamId))
 
     const organizationUsers = await dataLoader.get('organizationUsersByUserId').load(viewerId)
-    const userOrgIds = organizationUsers.map(({orgId}) => orgId)
+    const userOrgIds = await filterGrantedOrgIds(
+      organizationUsers.map(({orgId}) => orgId),
+      resourceGrants
+    )
 
     const allOrgTeams = (await dataLoader.get('teamsByOrgIds').loadMany(userOrgIds))
       .filter(isValid)
@@ -806,21 +823,28 @@ const User: ReqResolvers<'User'> = {
     // all team ids which could have accessible templates
     const allTeamIds = ['aGhostTeam', ...allOrgTeams.map(({id}) => id)]
 
-    const response = await fetch(EMBED_URL, {
-      method: 'POST',
-      body: JSON.stringify({inputs: search}),
-      headers: {'Content-Type': 'application/json', 'User-Agent': 'parabol'}
+    if (!activeEmbeddingDefinition) return []
+    const {templateSearchFloor, templateSearchGap} = activeEmbeddingDefinition
+    const vector = await publishToEmbedder({
+      jobType: 'userQuery:start',
+      data: getUserQueryJobData(search),
+      userId,
+      dataLoader
     })
-    const data = await response.json()
+    if (!vector || vector instanceof Error) return []
 
     const pg = getKysely()
-    const similarEmbeddings = await pg
+    const tableName = getEmbeddingsTableName(activeEmbeddingModelId)
+    const similarTemplates = await pg
       .with('Model', (qc) =>
         qc
-          .selectFrom(MODEL as any)
-          // @ts-ignore
-          .innerJoin('EmbeddingsMetadata', 'EmbeddingsMetadata.id', `${MODEL}.embeddingsMetadataId`)
-          .select([`${MODEL}.id`, 'embeddingsMetadataId', 'embedding', 'refId'])
+          .selectFrom(tableName)
+          .innerJoin(
+            'EmbeddingsMetadata',
+            'EmbeddingsMetadata.id',
+            `${tableName}.embeddingsMetadataId`
+          )
+          .select([`${tableName}.id`, 'embeddingsMetadataId', 'embedding', 'refId'])
           .where('objectType', '=', 'meetingTemplate')
           .where('teamId', 'in', allTeamIds)
       )
@@ -834,46 +858,41 @@ const User: ReqResolvers<'User'> = {
             eb(
               val(1),
               '-',
-              parens('Model.embedding' as any, '<=>' as any, JSON.stringify(data[0]))
+              parens('Model.embedding' as any, '<=>' as any, numberVectorToString(vector))
             ).as('similarity')
           ])
       )
       .selectFrom('CosineSimilarity')
-      .select(['embeddingId', 'similarity', 'embeddingsMetadataId', 'refId'])
-      .where('similarity', '>=', SIMILARITY_THRESHOLD)
+      .select(({fn}) => ['refId', fn.max('similarity').as('similarity')])
+      .where('similarity', '>=', templateSearchFloor)
+      .groupBy('refId')
       .orderBy('similarity', 'desc')
       .execute()
 
-    const aiActivityIds = similarEmbeddings.map(({refId}) => refId)
-
     // TODO filter out seasonal templates
-    const activities = await dataLoader.get('meetingTemplates').loadMany(aiActivityIds)
-    const accessibleActivities = activities.filter(isValid).filter((activity) => {
-      return activity.scope !== 'TEAM' || teamIds.includes(activity.teamId)
+    const activities = await dataLoader
+      .get('meetingTemplates')
+      .loadMany(similarTemplates.map(({refId}) => refId))
+    const accessibleMatches = similarTemplates.flatMap(({similarity}, idx) => {
+      const activity = activities[idx]
+      if (!isValid(activity)) return []
+      if (activity.scope === 'TEAM' && !teamIds.includes(activity.teamId)) return []
+      return [{activity, similarity}]
     })
-    return accessibleActivities
+    const floor = (accessibleMatches[0]?.similarity ?? 0) - templateSearchGap
+    return accessibleMatches
+      .filter(({similarity}) => similarity >= floor)
+      .slice(0, TEMPLATE_SEARCH_LIMIT)
+      .map(({activity}) => activity)
   },
-  parseSAMLMetadata: async (_source, {metadataURL, domain}) => {
-    const metadata = await getSSOMetadataFromURL(metadataURL)
-    if (metadata instanceof Error) return {error: {message: metadata.message}}
-    const baseUrl = getSignOnURL(metadata, domain)
-    if (baseUrl instanceof Error) {
-      return {error: {message: baseUrl.message}}
-    }
-    // append the new metadataURL to the RelayState
-    // The IdP will forward this to us and our SAMLHandler/loginSAML will use this instead of what's in the DB
-    const relayState = base64url.encode(JSON.stringify({metadataURL}))
-    const urlObj = new URL(baseUrl)
-    urlObj.searchParams.append('RelayState', relayState)
-    return {url: urlObj.toString()}
+  samlIdP: async ({email}, _args, {dataLoader}) => {
+    return getSAMLURLFromEmail(email, dataLoader)
   },
-  picture: async ({picture}, _args, {dataLoader}) => {
-    return dataLoader.get('fileStoreAsset').load(picture)
-  },
-  rasterPicture: async ({picture}, _args, {dataLoader}) => {
+
+  rasterPicture: async ({picture}) => {
     const rasterPicture =
       picture && picture.endsWith('.svg') ? picture.slice(0, -3) + 'png' : picture
-    return dataLoader.get('fileStoreAsset').load(rasterPicture)
+    return rasterPicture
   },
   highestTier: async ({id: userId}, _args, {dataLoader}) => {
     const highestTier = await dataLoader.get('highestTierForUserId').load(userId)
@@ -881,171 +900,18 @@ const User: ReqResolvers<'User'> = {
   },
   pageInsights,
   aiPrompts,
-  pages: async (
-    _source,
-    {parentPageId, isPrivate, first, after, teamId, isArchived, textFilter},
-    {authToken}
-  ) => {
-    if (parentPageId && teamId) {
-      throw new GraphQLError('parentPageId and teamId are mutually exclusive')
-    }
-
+  pages,
+  search,
+  personalAccessTokens: async (_source, _args, {authToken}) => {
     const viewerId = getUserId(authToken)
-    const dbParentPageId = parentPageId
-      ? CipherId.fromClient(parentPageId)[0]
-      : parentPageId === null
-        ? null
-        : undefined
-    const isPrivateDefined = typeof isPrivate === 'boolean'
-    if (isArchived) {
-      // this is a separate query because deletedBy is going to be a more exclusive index
-      // and archived items use deletedAt for their cursor instead of a sortOrder
-      const pagesPlusOne = await selectPages()
-        .where('deletedBy', '=', viewerId)
-        .$if(!!teamId, (qb) => qb.where('teamId', '=', teamId!))
-        .$if(dbParentPageId === null, (qb) => qb.where('parentPageId', 'is', null))
-        .$if(!!dbParentPageId, (qb) => qb.where('parentPageId', '=', dbParentPageId!))
-        .$if(isPrivateDefined, (qb) => qb.where('isPrivate', '=', isPrivate!))
-        .$if(!!textFilter, (qb) => qb.where('title', 'ilike', `%${textFilter}%`))
-        .orderBy('deletedAt', 'desc')
-        .$narrowType<{deletedAt: NotNull}>()
-        .execute()
-      const hasNextPage = pagesPlusOne.length > first
-      const pages = hasNextPage ? pagesPlusOne.slice(0, -1) : pagesPlusOne
-      return {
-        pageInfo: {
-          hasNextPage,
-          hasPreviousPage: false,
-          startCursor: pages.at(0)?.deletedAt.toJSON(),
-          endCursor: pages.at(-1)?.deletedAt.toJSON()
-        },
-        edges: pages.map((page) => ({
-          node: page,
-          cursor: page.deletedAt.toJSON()
-        }))
-      }
-    }
-    if (isPrivate === false) {
-      const pg = getKysely()
-      // this is for shared pages, which only return the top-most accessible page
-      const pagesPlusOne = await pg
-        .with('teams', (qc) =>
-          qc
-            .selectFrom('TeamMember')
-            .select('teamId')
-            .where('userId', '=', viewerId)
-            .where('isNotRemoved', '=', true)
-        )
-        .with('pages', (qc) =>
-          selectPages(qc as any)
-            .innerJoin('PageAccess', 'PageAccess.pageId', 'Page.id')
-            .where('PageAccess.userId', '=', viewerId)
-            .where('deletedBy', 'is', null)
-        )
-
-        .selectFrom('pages as p')
-        .selectAll()
-        // if a parent page is in the result set, exclude children
-        .where(({not, exists, selectFrom}) =>
-          not(
-            exists(
-              selectFrom('pages as parent')
-                .select('id')
-                .whereRef('parent.id', '=', 'p.parentPageId')
-            )
-          )
-        )
-        // if the user has access to that team, don't put it in Shared Pages
-        // this must go down here because a parentPage has the teamId so we need to first remove all descendants
-        .where(({or, eb, selectFrom}) =>
-          or([
-            eb('teamId', 'is', null),
-            eb('teamId', 'not in', selectFrom('teams').select('teamId'))
-          ])
-        )
-        .where('isPrivate', '=', false) // this must go down here so a shared child of a private page doesn't show up
-        .$if(!!textFilter, (qb) => qb.where('title', 'ilike', `%${textFilter}%`))
-        .leftJoin('PageUserSortOrder', (join) =>
-          join
-            .on('PageUserSortOrder.userId', '=', viewerId)
-            .onRef('PageUserSortOrder.pageId', '=', 'p.id')
-        )
-        .select(({ref}) => [ref('PageUserSortOrder.sortOrder').as('userSortOrder'), 'p.sortOrder'])
-        .orderBy('userSortOrder', (od) => od.asc().nullsFirst())
-        .$if(!!after, (qb) => qb.where('PageUserSortOrder.sortOrder', '>', after!))
-        .limit(first + 1)
-        .execute()
-      const hasUnsorted = pagesPlusOne[0]?.userSortOrder === null
-      if (hasUnsorted) {
-        let curSortOrder = ' '
-        // the nulls will be at the beginning of the array
-        await Promise.all(
-          pagesPlusOne.toReversed().map((p) => {
-            if (p.userSortOrder) {
-              curSortOrder = p.userSortOrder
-              return undefined
-            } else {
-              p.userSortOrder = positionBefore(curSortOrder)
-              curSortOrder = p.userSortOrder
-              return pg
-                .insertInto('PageUserSortOrder')
-                .values({
-                  pageId: p.id,
-                  userId: viewerId,
-                  sortOrder: p.userSortOrder
-                })
-                .execute()
-            }
-          })
-        )
-      }
-      const hasNextPage = pagesPlusOne.length > first
-      const pages = hasNextPage ? pagesPlusOne.slice(0, -1) : pagesPlusOne
-      return {
-        pageInfo: {
-          hasNextPage,
-          hasPreviousPage: false,
-          startCursor: pages.at(0)?.userSortOrder!,
-          endCursor: pages.at(-1)?.userSortOrder!
-        },
-        edges: pages.map((page) => ({
-          node: page,
-          cursor: page.userSortOrder!
-        }))
-      }
-    }
-    const pagesPlusOne = await selectPages()
-      .innerJoin('PageAccess', 'PageAccess.pageId', 'Page.id')
-      .$if(!!dbParentPageId, (qb) => qb.where('parentPageId', '=', dbParentPageId!))
-      .where('PageAccess.userId', '=', viewerId)
-      .$if(!!teamId, (qb) => qb.where('teamId', '=', teamId!))
-      .$if(isPrivateDefined, (qb) => qb.where('isPrivate', '=', isPrivate!))
-      .$if(dbParentPageId === null, (qb) => qb.where('parentPageId', 'is', null))
-      .$if(teamId === null, (qb) => qb.where('teamId', 'is', null))
-      .$if(!!after, (qb) => qb.where('sortOrder', '>', after!))
-      // TODO make this a variable, but for now, hide summaries from everything
-      .where('summaryMeetingId', 'is', null)
-      .$if(!!textFilter, (qb) => qb.where('title', 'ilike', `%${textFilter}%`))
-      .where('deletedBy', 'is', null)
-      .orderBy('sortOrder')
-      .limit(first + 1)
-      .execute()
-    // ok now we have ALL the pages the user has access to, but we need to filter out the ones
-    const hasNextPage = pagesPlusOne.length > first
-    const pages = hasNextPage ? pagesPlusOne.slice(0, -1) : pagesPlusOne
-
-    return {
-      pageInfo: {
-        hasNextPage,
-        hasPreviousPage: false,
-        startCursor: pages.at(0)?.sortOrder,
-        endCursor: pages.at(-1)?.sortOrder
-      },
-      edges: pages.map((page) => ({
-        node: page,
-        cursor: page.sortOrder
-      }))
-    }
+    const tokens = await selectPersonalAccessToken().where('userId', '=', viewerId).execute()
+    return tokens
+  },
+  oauthAuthorizationRequest: async ({id: userId}, {request}, {dataLoader}) => {
+    const authorization = await validateOAuthAuthorizationRequest(request, userId, dataLoader)
+    if ('error' in authorization) return null
+    const {provider, scopes} = authorization
+    return {name: provider.name, orgId: provider.orgId, scopes, redirectUri: request.redirectUri}
   }
 }
 

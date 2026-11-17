@@ -1,16 +1,10 @@
-const tsJestPresets = require('ts-jest/presets')
-
 module.exports = {
   testEnvironment: 'node',
   transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        diagnostics: false
-      }
-    ]
+    '^.+\\.(t|j)sx?$': ['@swc/jest']
   },
   modulePaths: ['<rootDir>/packages/'],
+  transformIgnorePatterns: ['/marked\.esm\.js/'],
   moduleNameMapper: {
     'server/(.*)': ['<rootDir>/$1'],
     'parabol-client/(.*)': ['<rootDir>/../client/$1'],

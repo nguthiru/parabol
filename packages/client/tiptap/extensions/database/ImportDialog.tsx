@@ -1,29 +1,20 @@
 import {useMemo, useState} from 'react'
 import * as Y from 'yjs'
-import FlatPrimaryButton from '../../../components/FlatPrimaryButton'
-import SecondaryButton from '../../../components/SecondaryButton'
-import {UploadCSV} from '../../../components/UploadCSV'
+import {UploadDatabaseImport} from '../../../components/UploadDatabaseImport'
 import useAtmosphere from '../../../hooks/useAtmosphere'
+import {Button} from '../../../ui/Button/Button'
 import {Checkbox} from '../../../ui/Checkbox/Checkbox'
 import {cn} from '../../../ui/cn'
 import {Dialog} from '../../../ui/Dialog/Dialog'
 import {DialogActions} from '../../../ui/Dialog/DialogActions'
 import {DialogContent} from '../../../ui/Dialog/DialogContent'
 import {DialogTitle} from '../../../ui/Dialog/DialogTitle'
+import {Spinner} from '../../../ui/Spinner/Spinner'
 import plural from '../../../utils/plural'
-import {DEFAULT_COLUMNS} from './Database'
-import {
-  appendColumn,
-  appendRow,
-  changeColumn,
-  getColumnMeta,
-  getColumns,
-  getData,
-  getRows
-} from './data'
+import {columnsAreDefault} from './columnsAreDefault'
+import {getColumnMeta, getColumns, getData, getDataEntries, getRows, type RowDataMap} from './data'
 import {useYArray, useYMap} from './hooks'
-
-const HEADER_MISMATCH = 'CSV headers do not match current table columns'
+import {getRecordHeaders, importRecords} from './importRecords'
 
 const clearAllData = (doc: Y.Doc) => {
   const columns = getColumns(doc)
@@ -39,57 +30,20 @@ const clearAllData = (doc: Y.Doc) => {
   })
 }
 
-const rowIsEmpty = (row: Y.Map<string>) => {
-  if (row.size === 0) return true
-  for (const key of row.keys()) {
-    if (!key.startsWith('_')) return false
-  }
-  return true
+const rowIsEmpty = (row: RowDataMap) => {
+  return row.yarray.toArray().every(({key}) => key.startsWith('_'))
 }
-const useIsDataEmpty = (doc: Y.Doc) => {
-  const rows = useYArray(getRows(doc))
-  const data = useYMap(getData(doc))
+const isDataEmpty = (doc: Y.Doc) => {
+  const rows = getRows(doc)
+  const data = getDataEntries(doc)
 
-  return useMemo(() => {
-    if (rows.length === 0) return true
-    for (const row of data.values()) {
-      if (!rowIsEmpty(row)) {
-        return false
-      }
-    }
-    return true
-  }, [data, rows])
-}
-
-const columnsAreDefault = (doc: Y.Doc) => {
-  const columns = getColumns(doc)
-  const columnMeta = getColumnMeta(doc)
-  if (columns.length !== DEFAULT_COLUMNS.length) return false
-  for (let i = 0; i < DEFAULT_COLUMNS.length; i++) {
-    const columnId = columns.get(i)!
-    const meta = columnMeta.get(columnId)
-    if (!meta) return false
-    if (meta.name !== DEFAULT_COLUMNS[i]!.name || meta.type !== DEFAULT_COLUMNS[i]!.type) {
+  if (rows.length === 0) return true
+  for (const [_, row] of data) {
+    if (!rowIsEmpty(row)) {
       return false
     }
   }
   return true
-}
-
-const importRecords = (doc: Y.Doc, viewerId: string, records: string[][]) => {
-  const first = records[0]
-  if (!first) return
-
-  const columns = getColumns(doc).toArray()
-
-  if (columns.length < first.length) {
-    throw new Error(HEADER_MISMATCH)
-  }
-
-  records.forEach((record) => {
-    const mappedRecord = Object.fromEntries(record.map((value, index) => [columns[index], value]))
-    appendRow(doc, viewerId, mappedRecord)
-  })
 }
 
 type Props = {
@@ -103,7 +57,7 @@ export const ImportDialog = (props: Props) => {
   const {viewerId} = useAtmosphere()
 
   const [error, setError] = useState<Error | null>(null)
-  const [records, setRecords] = useState<string[][]>()
+  const [records, setRecords] = useState<(string | null)[][]>()
 
   const [firstRowIsHeader, setFirstRowIsHeader] = useState(true)
   const [discardExistingData, setDiscardExistingData] = useState(false)
@@ -111,16 +65,14 @@ export const ImportDialog = (props: Props) => {
 
   const columns = useYArray(getColumns(doc))
   const columnMeta = useYMap(getColumnMeta(doc))
-  const rows = useYArray(getRows(doc))
+  const yRows = getRows(doc)
 
-  const dataIsEmpty = useIsDataEmpty(doc)
+  const dataIsEmpty = useMemo(() => !isOpen || isDataEmpty(doc), [isOpen, yRows.length, doc])
 
   const headers = useMemo(() => {
     if (!records || records.length === 0) return []
 
-    const newHeaders = firstRowIsHeader
-      ? records[0]!
-      : records[0]!.map((_, index) => `Column ${index + 1}`)
+    const newHeaders = getRecordHeaders(records, firstRowIsHeader)
     if (discardExistingData || columnsAreDefault(doc)) {
       return newHeaders
     }
@@ -132,34 +84,44 @@ export const ImportDialog = (props: Props) => {
     })
   }, [columns, columnMeta, firstRowIsHeader, discardExistingData, records])
 
+  const [isImporting, setIsImporting] = useState(false)
+
   const resetState = () => {
     setRecords(undefined)
     setError(null)
     setFirstRowIsHeader(true)
     setDiscardExistingData(false)
+    setIsImporting(false)
   }
 
-  const onImport = () => {
+  const onParseStarted = () => {
+    setIsImporting(true)
+    setError(null)
+  }
+
+  const onError = (error: Error | null) => {
+    setIsImporting(false)
+    setError(error)
+  }
+
+  const onRecordsParsed = (records: (string | null)[][]) => {
+    setIsImporting(false)
+    setRecords(records)
+  }
+
+  const onImport = async () => {
     if (!records) return
+    setIsImporting(true)
     doc.transact(() => {
       if (discardExistingData || dataIsEmpty) {
         clearAllData(doc)
       }
-
-      const newHeaders = firstRowIsHeader
-        ? records[0]!
-        : records[0]!.map((_, index) => `Column ${index + 1}`)
-      const columns = getColumns(doc)
-      if (columnsAreDefault(doc)) {
-        columns.forEach((columnId, index) => {
-          changeColumn(doc, columnId, {name: newHeaders[index]!, type: 'text'})
-        })
-      }
-      newHeaders.slice(columns.length).forEach((name) => {
-        appendColumn(doc, {name, type: 'text'})
+    })
+    await new Promise<void>((resolve) => {
+      setImmediate(() => {
+        importRecords(doc, viewerId, records, {firstRowIsHeader})
+        resolve()
       })
-
-      importRecords(doc, viewerId, records.slice(firstRowOffset))
     })
     resetState()
     onClose()
@@ -179,19 +141,28 @@ export const ImportDialog = (props: Props) => {
 
   const moreExistingHeaders = headers.length < columns.length && !discardExistingData
   // if there is some data, then we count all rows, including empty ones
-  const existingRowCount = dataIsEmpty ? 0 : rows.length
+  const existingRowCount = dataIsEmpty ? 0 : yRows.length
 
   return (
     <Dialog isOpen={isOpen} onClose={onCancel}>
-      <DialogContent className='z-10 lg:w-4xl lg:max-w-4xl xl:w-5xl xl:max-w-5xl'>
-        <DialogTitle className='mb-4'>Import CSV</DialogTitle>
+      <DialogContent className='absolute z-10 lg:w-4xl lg:max-w-4xl xl:w-5xl xl:max-w-5xl'>
+        <DialogTitle className='mb-4'>Import Data</DialogTitle>
+        {isImporting && (
+          <div className='absolute top-0 left-0 z-10 flex h-full w-full items-center justify-center bg-surface-card/50'>
+            <Spinner />
+          </div>
+        )}
         {!records ? (
-          <UploadCSV onRecordsParsed={setRecords} onError={setError} />
+          <UploadDatabaseImport
+            onParseStarted={onParseStarted}
+            onRecordsParsed={onRecordsParsed}
+            onError={onError}
+          />
         ) : (
-          <div className='mb-3 text-left font-semibold text-slate-600 text-sm'>
-            Import settings
+          <div className='mb-3 text-left text-sm'>
+            <div className='font-semibold text-fg-secondary'>Import settings</div>
             <div
-              className='flex cursor-pointer flex-row gap-2 p-1 align-center'
+              className='flex cursor-pointer items-center gap-2 py-1'
               onClick={() => setFirstRowIsHeader(!firstRowIsHeader)}
             >
               <Checkbox checked={firstRowIsHeader} />
@@ -199,35 +170,33 @@ export const ImportDialog = (props: Props) => {
             </div>
             {!dataIsEmpty && (
               <div
-                className='flex cursor-pointer flex-row gap-2 p-1 align-center'
+                className='flex cursor-pointer items-center gap-2 py-1'
                 onClick={() => setDiscardExistingData(!discardExistingData)}
               >
                 <Checkbox checked={discardExistingData} disabled={dataIsEmpty} />
-                Discard existing data ({rows.length} {plural(rows.length, 'row')})
+                Discard existing data ({yRows.length} {plural(yRows.length, 'row')})
               </div>
             )}
-            <div className={'mt-4 text-sm'}>
+            <div className='mt-4 mb-2 text-fg-secondary'>
               Previewing {previewLength < recordCount ? `the first ${previewLength} of` : 'all'}{' '}
               {recordCount} {plural(recordCount, 'record')}...
             </div>
-            <div
-              className={
-                'mb-4 flex h-50 w-full flex-col overflow-auto rounded-lg border-2 border-slate-400 text-slate-500'
-              }
-            >
-              <table className={'relative min-w-full border-collapse bg-white'}>
+            <div className='mb-4 flex max-h-50 w-full flex-col overflow-auto rounded-lg border border-hairline bg-surface-card'>
+              <table className='relative min-w-full border-collapse [&_tbody_tr:last-child_td]:border-b-0'>
                 <thead>
-                  <tr className='text-slate-600'>
+                  <tr className='bg-surface-raised text-fg-secondary'>
                     {headers.map((name, index) => (
                       <th
                         key={index}
-                        className='w-24 min-w-24 truncate border-slate-400 border-b-1 p-2 text-left'
+                        className='w-24 min-w-24 truncate border-hairline border-b border-l px-3 py-2 text-left font-medium first:border-l-0'
                       >
                         {name}
                       </th>
                     ))}
                     {moreExistingHeaders && (
-                      <th className='w-4 max-w-4 border-slate-400 border-b-1 p-2'>...</th>
+                      <th className='w-4 max-w-4 border-hairline border-b border-l px-3 py-2 font-medium'>
+                        ...
+                      </th>
                     )}
                   </tr>
                 </thead>
@@ -237,8 +206,8 @@ export const ImportDialog = (props: Props) => {
                       <td
                         colSpan={headers.length + (moreExistingHeaders ? 1 : 0)}
                         className={cn(
-                          'h-8 border-slate-400 border-b-1 border-dashed px-2',
-                          discardExistingData && 'text-tomato-600'
+                          'h-8 border-hairline border-b border-dashed px-3 text-fg-muted',
+                          discardExistingData && 'text-fg-error'
                         )}
                       >
                         <div className='-translate-x-1/2 sticky left-1/2 w-fit'>
@@ -256,13 +225,13 @@ export const ImportDialog = (props: Props) => {
                         {record.map((cell, cellIndex) => (
                           <td
                             key={cellIndex}
-                            className='border-slate-400 border-b-1 border-l-1 p-2 text-left align-top first:border-l-0'
+                            className='border-hairline border-b border-l px-3 py-2 text-left align-top first:border-l-0'
                           >
                             {cell}
                           </td>
                         ))}
                         {moreExistingHeaders && (
-                          <td className='border-slate-400 border-b-1 border-l-1'></td>
+                          <td className='border-hairline border-b border-l' />
                         )}
                       </tr>
                     ))}
@@ -272,25 +241,25 @@ export const ImportDialog = (props: Props) => {
           </div>
         )}
         {error && (
-          <div className='mb-4 rounded-md bg-red-50 p-3 text-sm text-tomato-700'>
+          <div className='mb-4 rounded-md bg-tomato-100 p-3 text-sm text-tomato-800'>
             Error importing: {error.message}
           </div>
         )}
 
-        <DialogActions className='mt-0 flex w-full gap-4'>
+        <DialogActions>
           {records ? (
             <>
-              <SecondaryButton size='medium' onClick={onBack}>
+              <Button variant='outline' size='md' onClick={onBack}>
                 Back
-              </SecondaryButton>
-              <FlatPrimaryButton size='medium' onClick={onImport}>
+              </Button>
+              <Button variant='primary' size='md' onClick={onImport}>
                 {discardExistingData ? 'Replace' : 'Append'}
-              </FlatPrimaryButton>
+              </Button>
             </>
           ) : (
-            <SecondaryButton size='medium' onClick={onCancel}>
+            <Button variant='outline' size='md' onClick={onCancel}>
               Cancel
-            </SecondaryButton>
+            </Button>
           )}
         </DialogActions>
       </DialogContent>

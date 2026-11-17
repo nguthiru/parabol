@@ -1,37 +1,28 @@
-import styled from '@emotion/styled'
 import graphql from 'babel-plugin-relay/macro'
 import {useFragment} from 'react-relay'
+import {useNavigate} from 'react-router'
 import EndCheckInMutation from '~/mutations/EndCheckInMutation'
 import type {ActionMeetingLastCall_meeting$key} from '../__generated__/ActionMeetingLastCall_meeting.graphql'
 import useAtmosphere from '../hooks/useAtmosphere'
 import useMutationProps from '../hooks/useMutationProps'
-import useRouter from '../hooks/useRouter'
 import AgendaShortcutHint from '../modules/meeting/components/AgendaShortcutHint/AgendaShortcutHint'
 import MeetingCopy from '../modules/meeting/components/MeetingCopy/MeetingCopy'
 import MeetingFacilitationHint from '../modules/meeting/components/MeetingFacilitationHint/MeetingFacilitationHint'
 import MeetingPhaseHeading from '../modules/meeting/components/MeetingPhaseHeading/MeetingPhaseHeading'
+import {Button} from '../ui/Button/Button'
 import {AGENDA_ITEM_LABEL} from '../utils/constants'
 import {phaseLabelLookup} from '../utils/meetings/lookups'
 import plural from '../utils/plural'
 import type {ActionMeetingPhaseProps} from './ActionMeeting'
-import ErrorBoundary from './ErrorBoundary'
 import MeetingContent from './MeetingContent'
+import MeetingHeaderAndPhase from './MeetingHeaderAndPhase'
 import MeetingTopBar from './MeetingTopBar'
 import PhaseHeaderTitle from './PhaseHeaderTitle'
-import PrimaryButton from './PrimaryButton'
+import PhaseWrapper from './PhaseWrapper'
 
 interface Props extends ActionMeetingPhaseProps {
   meeting: ActionMeetingLastCall_meeting$key
 }
-
-const LastCallWrapper = styled('div')({
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'flex-start',
-  justifyContent: 'center',
-  marginLeft: 64,
-  height: '100%'
-})
 
 const ActionMeetingLastCall = (props: Props) => {
   const {avatarGroup, toggleSidebar, meeting: meetingRef} = props
@@ -59,7 +50,7 @@ const ActionMeetingLastCall = (props: Props) => {
     meetingRef
   )
   const atmosphere = useAtmosphere()
-  const {history} = useRouter()
+  const navigate = useNavigate()
   const {submitting, onError, onCompleted, submitMutation} = useMutationProps()
   const {viewerId} = atmosphere
   const {endedAt, facilitator, facilitatorUserId, id: meetingId, phases, showSidebar} = meeting
@@ -75,13 +66,13 @@ const ActionMeetingLastCall = (props: Props) => {
   const endMeeting = () => {
     if (submitting) return
     submitMutation()
-    EndCheckInMutation(atmosphere, {meetingId}, {history, onError, onCompleted})
+    EndCheckInMutation(atmosphere, {meetingId}, {navigate, onError, onCompleted})
   }
 
   const getHeadingText = () => {
     if (endedAt && agendaItemsCompleted === 0) return <span>Nothing to see here</span>
     else if (agendaItemsCompleted === 0) return <span>{`No ${labelAgendaItems}?`}</span>
-    else return <span>{'Last Call:'}</span>
+    else return <span>{'Last Call'}</span>
   }
 
   const getMeetingCopy = () => {
@@ -110,34 +101,37 @@ const ActionMeetingLastCall = (props: Props) => {
 
   return (
     <MeetingContent>
-      <MeetingTopBar
-        avatarGroup={avatarGroup}
-        isMeetingSidebarCollapsed={!showSidebar}
-        toggleSidebar={toggleSidebar}
-      >
-        <PhaseHeaderTitle>{phaseLabelLookup.agendaitems}</PhaseHeaderTitle>
-      </MeetingTopBar>
-      <ErrorBoundary>
-        <LastCallWrapper>
-          <MeetingPhaseHeading>{getHeadingText()}</MeetingPhaseHeading>
-          <MeetingCopy>{getMeetingCopy()}</MeetingCopy>
-          {!endedAt && <AgendaShortcutHint />}
-          {isFacilitating ? (
-            <PrimaryButton
-              aria-label='End Meeting'
-              size='large'
-              onClick={endMeeting}
-              disabled={!!endedAt}
-            >
-              End Check-in Meeting
-            </PrimaryButton>
-          ) : !endedAt ? (
-            <MeetingFacilitationHint>
-              {'Waiting for'} <b>{preferredName}</b> {`to end the meeting`}
-            </MeetingFacilitationHint>
-          ) : null}
-        </LastCallWrapper>
-      </ErrorBoundary>
+      <MeetingHeaderAndPhase hideBottomBar={!!endedAt}>
+        <MeetingTopBar
+          avatarGroup={avatarGroup}
+          isMeetingSidebarCollapsed={!showSidebar}
+          toggleSidebar={toggleSidebar}
+        >
+          <PhaseHeaderTitle>{phaseLabelLookup.agendaitems}</PhaseHeaderTitle>
+        </MeetingTopBar>
+        <PhaseWrapper>
+          <div className='ml-16 flex h-full flex-col items-start justify-center'>
+            <MeetingPhaseHeading>{getHeadingText()}</MeetingPhaseHeading>
+            <MeetingCopy className='mb-0'>{getMeetingCopy()}</MeetingCopy>
+            {!endedAt && <AgendaShortcutHint />}
+            {isFacilitating ? (
+              <Button
+                variant='primary'
+                aria-label='End Meeting'
+                size='lg'
+                onClick={endMeeting}
+                disabled={!!endedAt || submitting}
+              >
+                End Check-in Meeting
+              </Button>
+            ) : !endedAt ? (
+              <MeetingFacilitationHint>
+                {'Waiting for'} <b>{preferredName}</b> {`to end the meeting`}
+              </MeetingFacilitationHint>
+            ) : null}
+          </div>
+        </PhaseWrapper>
+      </MeetingHeaderAndPhase>
     </MeetingContent>
   )
 }

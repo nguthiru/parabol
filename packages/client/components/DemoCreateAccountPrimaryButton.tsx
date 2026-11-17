@@ -1,17 +1,17 @@
-import {type RouteComponentProps, withRouter} from 'react-router-dom'
+import {useNavigate} from 'react-router'
+import {Button} from '../ui/Button/Button'
 import hasToken from '../utils/hasToken'
-import PrimaryButton from './PrimaryButton'
 
-const DemoCreateAccountPrimaryButton = (props: RouteComponentProps) => {
-  const {history} = props
+const DemoCreateAccountPrimaryButton = () => {
+  const navigate = useNavigate()
   const path = hasToken() ? '/meetings' : '/create-account?from=demo'
   const label = hasToken() ? 'My Dashboard' : 'Create Free Account'
-  const handleClick = () => history.push(path)
+  const handleClick = () => navigate(path)
   return (
-    <PrimaryButton onClick={handleClick} size='medium'>
+    <Button variant='primary' onClick={handleClick} size='md'>
       {label}
-    </PrimaryButton>
+    </Button>
   )
 }
 
-export default withRouter(DemoCreateAccountPrimaryButton)
+export default DemoCreateAccountPrimaryButton

@@ -2,7 +2,7 @@ import graphql from 'babel-plugin-relay/macro'
 import {commitMutation} from 'react-relay'
 import {handleSuccessfulLogin} from '~/utils/handleSuccessfulLogin'
 import type {VerifyEmailMutation as TSignUpWithPasswordMutation} from '../__generated__/VerifyEmailMutation.graphql'
-import type {HistoryLocalHandler, StandardMutation} from '../types/relayMutations'
+import type {NavigateLocalHandler, StandardMutation} from '../types/relayMutations'
 import handleAuthenticationRedirect from './handlers/handleAuthenticationRedirect'
 
 const mutation = graphql`
@@ -12,7 +12,7 @@ const mutation = graphql`
     $isInvitation: Boolean!
   ) {
     verifyEmail(verificationToken: $verificationToken) {
-      error {
+      userErrors {
         message
       }
       ...handleSuccessfulLogin_UserLogInPayload @relay(mask: false)
@@ -22,10 +22,10 @@ const mutation = graphql`
     }
   }
 `
-const VerifyEmailMutation: StandardMutation<TSignUpWithPasswordMutation, HistoryLocalHandler> = (
+const VerifyEmailMutation: StandardMutation<TSignUpWithPasswordMutation, NavigateLocalHandler> = (
   atmosphere,
   variables,
-  {onError, onCompleted, history}
+  {onError, onCompleted, navigate}
 ) => {
   return commitMutation<TSignUpWithPasswordMutation>(atmosphere, {
     mutation,
@@ -34,13 +34,13 @@ const VerifyEmailMutation: StandardMutation<TSignUpWithPasswordMutation, History
     onCompleted: (res, errors) => {
       const {acceptTeamInvitation, verifyEmail} = res
       onCompleted({verifyEmail}, errors)
-      if (!errors) {
+      if (!errors && verifyEmail.userErrors.length === 0) {
         handleSuccessfulLogin(atmosphere, verifyEmail)
         const redirectPath = '/meetings'
 
         handleAuthenticationRedirect(acceptTeamInvitation, {
           atmosphere,
-          history,
+          navigate,
           redirectPath
         })
       }

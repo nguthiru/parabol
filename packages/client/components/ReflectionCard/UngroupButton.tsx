@@ -1,0 +1,28 @@
+import {CallSplit} from '~/ui/icons'
+import {cn} from '../../ui/cn'
+import type {PlainButtonProps} from '../PlainButton/PlainButton'
+import ReflectionCardButton from './ReflectionCardButton'
+
+type Props = {
+  showUngroupButton?: boolean
+  label?: string
+} & PlainButtonProps
+
+const UngroupButton = (props: Props) => {
+  const {showUngroupButton, label = 'Ungroup all', ...rest} = props
+  return (
+    <ReflectionCardButton
+      className={cn(
+        'invisible absolute bottom-1 left-1 bg-surface-card hover:bg-surface-hover',
+        showUngroupButton && 'visible'
+      )}
+      aria-label={label}
+      title={label}
+      {...rest}
+    >
+      <CallSplit className='h-5 w-5' />
+    </ReflectionCardButton>
+  )
+}
+
+export default UngroupButton

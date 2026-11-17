@@ -1,6 +1,6 @@
-import type {Location} from 'history'
 import {lazy} from 'react'
-import {Redirect, Route, Switch, useLocation} from 'react-router'
+import {type Location, Navigate, Route, Routes, useLocation} from 'react-router'
+import useAppSubscriptions from '../hooks/useAppSubscriptions'
 import useAuthRoute from '../hooks/useAuthRoute'
 import useNoIndex from '../hooks/useNoIndex'
 
@@ -19,11 +19,15 @@ const Impersonate = lazy(
 const Signout = lazy(
   () => import(/* webpackChunkName: 'SignoutContainer' */ '../containers/Signout/SignoutContainer')
 )
-const NotFound = lazy(() => import(/* webpackChunkName: 'NotFound' */ './NotFound/NotFound'))
 const DashboardRoot = lazy(() => import(/* webpackChunkName: 'DashboardRoot' */ './DashboardRoot'))
 const MeetingRoot = lazy(() => import(/* webpackChunkName: 'MeetingRoot' */ './MeetingRoot'))
-const MeetingSeriesRoot = lazy(
-  () => import(/* webpackChunkName: 'MeetingSeriesRoot' */ './MeetingSeriesRoot')
+const MeetingSeriesAttendRedirect = lazy(
+  () =>
+    import(/* webpackChunkName: 'MeetingSeriesAttendRedirect' */ './MeetingSeriesAttendRedirect')
+)
+const MeetingSeriesManagementRoot = lazy(
+  () =>
+    import(/* webpackChunkName: 'MeetingSeriesManagementRoot' */ './MeetingSeriesManagementRoot')
 )
 const ViewerNotOnTeamRoot = lazy(
   () => import(/* webpackChunkName: 'ViewerNotOnTeamRoot' */ './ViewerNotOnTeamRoot')
@@ -36,40 +40,74 @@ const ActivityLibraryRoutes = lazy(
     )
 )
 
+const OAuthAuthorizeRoot = lazy(
+  () => import(/* webpackChunkName: 'OAuthAuthorizeRoot' */ './OAuthAuthorizeRoot')
+)
+
 const ReviewRequestToJoinOrgRoot = lazy(
   () => import(/* webpackChunkName: 'ReviewRequestToJoinOrgRoot' */ './ReviewRequestToJoinOrgRoot')
 )
+const NotFound = lazy(() => import(/* webpackChunkName: 'NotFound' */ './NotFound/NotFound'))
+
+const DASHBOARD_PREFIXES = [
+  '/meetings',
+  '/me',
+  '/new-summary',
+  '/newteam',
+  '/team',
+  '/pages',
+  '/reports'
+]
+
+const DashboardOrNotFound = () => {
+  const {pathname} = useLocation()
+  const isDashboardRoute = DASHBOARD_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(prefix + '/')
+  )
+  if (!isDashboardRoute) return <NotFound />
+  return <DashboardRoot />
+}
 
 const PrivateRoutes = () => {
-  useAuthRoute()
+  const isSignedIn = useAuthRoute()
+  useAppSubscriptions()
   useNoIndex()
-  const location = useLocation<{backgroundLocation?: Location}>()
-  const state = location.state
+  const location = useLocation()
+  const state = location.state as {backgroundLocation?: Location} | null
+  const backgroundLocation = state?.backgroundLocation
+  // children's effects run before this redirect, so they'd send requests without a usable token
+  if (!isSignedIn) return null
   return (
     <>
-      <Switch location={state?.backgroundLocation || location}>
-        <Route path='/activity-library' component={ActivityLibraryRoutes} />
+      <Routes location={backgroundLocation || location}>
+        <Route path='/activity-library/*' element={<ActivityLibraryRoutes />} />
+        <Route path='/new-meeting' element={<Navigate to='/activity-library' replace />} />
+        <Route path='/meet/:meetingId/*' element={<MeetingRoot />} />
         <Route
-          path='(/meetings|/me|/new-summary|/newteam|/team|/organization-join-request|/pages)'
-          component={DashboardRoot}
+          path='/meeting-series/manage/:meetingSeriesId'
+          element={<MeetingSeriesManagementRoot />}
         />
-        <Route path='/new-meeting'>
-          <Redirect to='/activity-library' />
-        </Route>
-        <Route path='/meet/:meetingId' component={MeetingRoot} />
-        <Route path='/meeting-series/:meetingId' component={MeetingSeriesRoot} />
-        <Route path='/admin/graphql' component={Graphql} />
-        <Route path='/admin/impersonate' component={Impersonate} />
-        <Route path='/invitation-required' component={ViewerNotOnTeamRoot} />
-        <Route path='/signout' component={Signout} />
-        <Route component={NotFound} />
-      </Switch>
-      <Switch>
+        <Route path='/meeting-series/:slug' element={<MeetingSeriesAttendRedirect />} />
+        <Route path='/admin/graphql' element={<Graphql />} />
+        <Route path='/graphql' element={<Graphql />} />
+        <Route path='/admin/impersonate' element={<Impersonate />} />
+        <Route path='/invitation-required' element={<ViewerNotOnTeamRoot />} />
+        <Route path='/authorize-app' element={<OAuthAuthorizeRoot />} />
+        <Route path='/signout' element={<Signout />} />
         <Route
           path='/organization-join-request/:requestId'
-          component={ReviewRequestToJoinOrgRoot}
+          element={<ReviewRequestToJoinOrgRoot />}
         />
-      </Switch>
+        <Route path='*' element={<DashboardOrNotFound />} />
+      </Routes>
+      {backgroundLocation && (
+        <Routes>
+          <Route
+            path='/organization-join-request/:requestId'
+            element={<ReviewRequestToJoinOrgRoot />}
+          />
+        </Routes>
+      )}
     </>
   )
 }

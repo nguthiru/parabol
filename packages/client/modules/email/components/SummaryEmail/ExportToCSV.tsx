@@ -3,18 +3,16 @@ import {generateText} from '@tiptap/core'
 import graphql from 'babel-plugin-relay/macro'
 import type {ExportToCSVQuery} from 'parabol-client/__generated__/ExportToCSVQuery.graphql'
 import {PALETTE} from 'parabol-client/styles/paletteV3'
-import withMutationProps, {
-  type WithMutationProps
-} from 'parabol-client/utils/relay/withMutationProps'
 import {useEffect} from 'react'
 import useAtmosphere from '~/hooks/useAtmosphere'
+import useMutationProps from '~/hooks/useMutationProps'
 import {serverTipTapExtensions} from '../../../../shared/tiptap/serverTipTapExtensions'
 import {ExternalLinks, PokerCards} from '../../../../types/constEnums'
 import type {CorsOptions} from '../../../../types/cors'
 import AnchorIfEmail from './MeetingSummaryEmail/AnchorIfEmail'
 import type {MeetingSummaryReferrer} from './MeetingSummaryEmail/MeetingSummaryEmail'
 
-interface Props extends WithMutationProps {
+interface Props {
   meetingId: string
   urlAction?: 'csv' | undefined
   emailCSVUrl: string
@@ -70,18 +68,39 @@ const query = graphql`
                 integration {
                   ... on JiraIssue {
                     __typename
-                    summary
+                    title
                     issueKey
+                  }
+                  ... on JiraServerIssue {
+                    __typename
+                    title
+                    issueKey
+                  }
+                  ... on AzureDevOpsWorkItem {
+                    __typename
+                    title
+                    workItemKey: issueKey
                   }
                   ... on _xGitHubIssue {
                     __typename
-                    number
                     title
+                    number
+                  }
+                  ... on _xGitLabIssue {
+                    __typename
+                    title
+                    iid
                   }
                   ... on _xLinearIssue {
                     __typename
-                    identifier
                     title
+                    identifier
+                  }
+                  ... on ClickUpTask {
+                    __typename
+                    title
+                    taskId
+                    customId
                   }
                 }
                 title
@@ -179,14 +198,9 @@ const imageStyle = {
 }
 
 const ExportToCSV = (props: Props) => {
-  useEffect(() => {
-    if (props.urlAction === 'csv') {
-      exportToCSV().catch(() => {
-        /*ignore*/
-      })
-    }
-  }, [props.urlAction])
+  const {meetingId, urlAction, emailCSVUrl, referrer, corsOptions} = props
   const atmosphere = useAtmosphere()
+  const {submitMutation, submitting, onCompleted} = useMutationProps()
 
   const handlePokerMeeting = (meeting: Meeting) => {
     const rows = [] as CSVPokerRow[]
@@ -199,14 +213,27 @@ const ExportToCSV = (props: Props) => {
       if (!dimensionRef || !task) return
       const {name} = dimensionRef
       const {integration, title} = task
-      let story = title
-      if (integration?.__typename === 'JiraIssue') {
-        story = `${integration.issueKey}: ${integration.summary}`
-      } else if (integration?.__typename === '_xGitHubIssue') {
-        story = `${integration.number}: ${integration.title}`
-      } else if (integration?.__typename === '_xLinearIssue') {
-        story = `${integration.identifier}: ${integration.title}`
+      const getStory = () => {
+        if (!integration) return title
+        switch (integration.__typename) {
+          case 'JiraIssue':
+          case 'JiraServerIssue':
+            return `${integration.issueKey}: ${integration.title}`
+          case 'AzureDevOpsWorkItem':
+            return `${integration.workItemKey}: ${integration.title}`
+          case '_xGitHubIssue':
+            return `${integration.number}: ${integration.title}`
+          case '_xGitLabIssue':
+            return `${integration.iid}: ${integration.title}`
+          case '_xLinearIssue':
+            return `${integration.identifier}: ${integration.title}`
+          case 'ClickUpTask':
+            return `${integration.customId ?? integration.taskId}: ${integration.title}`
+          default:
+            return title
+        }
       }
+      const story = getStory()
       const voteCount = scores!.filter((score) => score.label !== PokerCards.PASS_CARD).length
       rows.push({
         story,
@@ -343,7 +370,6 @@ const ExportToCSV = (props: Props) => {
   }
 
   const exportToCSV = async () => {
-    const {meetingId, submitMutation, submitting, onCompleted} = props
     if (submitting) return
     submitMutation()
     const data = await atmosphere.fetchQuery<ExportToCSVQuery>(query, {
@@ -378,7 +404,14 @@ const ExportToCSV = (props: Props) => {
     document.body.removeChild(link)
   }
 
-  const {emailCSVUrl, referrer, corsOptions} = props
+  useEffect(() => {
+    if (urlAction === 'csv') {
+      exportToCSV().catch(() => {
+        /*ignore*/
+      })
+    }
+  }, [urlAction])
+
   return (
     <tr className='print:hidden'>
       <td align='center' style={iconLinkLabel} width='100%'>
@@ -396,4 +429,4 @@ const ExportToCSV = (props: Props) => {
   )
 }
 
-export default withMutationProps(ExportToCSV)
+export default ExportToCSV

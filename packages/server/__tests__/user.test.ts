@@ -1,7 +1,12 @@
-import faker from 'faker'
-import TeamMemberId from '../../client/shared/gqlIds/TeamMemberId'
 import getKysely from '../postgres/getKysely'
-import {sendIntranet, sendPublic, signUp, signUpWithEmail} from './common'
+import {
+  getTestDomain,
+  getTestEmail,
+  sendIntranet,
+  sendPublic,
+  signUp,
+  signUpWithEmail
+} from './common'
 
 test('Get user by id', async () => {
   const {email, userId} = await signUp()
@@ -74,9 +79,9 @@ test('Get user by email', async () => {
 })
 
 test('First user is patientZero', async () => {
-  const domain = faker.internet.domainName()
-  const email1 = `${faker.internet.userName()}@${domain}`
-  const email2 = `${faker.internet.userName()}@${domain}`
+  const domain = getTestDomain()
+  const email1 = getTestEmail(domain)
+  const email2 = getTestEmail(domain)
 
   const {userId: user1Id} = await signUpWithEmail(email1)
   const {userId: user2Id} = await signUpWithEmail(email2)
@@ -266,10 +271,11 @@ test('Creating and archiving teams updates User.tms', async () => {
     data: {
       viewer: {
         id: user.userId,
-        tms: [team1Id, team2Id]
+        tms: expect.arrayContaining([team1Id, team2Id])
       }
     }
   })
+  expect(user2.data.viewer.tms).toHaveLength(2)
 
   const archivedTeam = await sendPublic({
     query: `
@@ -340,13 +346,11 @@ test('Leaving a team updates User.tms', async () => {
     }
   })
   const teamId = user1.data.viewer.tms[0]
-  const teamMemberId = TeamMemberId.join(teamId, user.userId)
-  console.log('teamMemberId', teamMemberId)
 
   const leftTeam = await sendPublic({
     query: `
-      mutation RemoveTeamMember($teamMemberId: ID!) {
-        removeTeamMember(teamMemberId: $teamMemberId) {
+      mutation RemoveTeamMember($teamId: ID!, $userId: ID!) {
+        removeTeamMember(teamId: $teamId, userId: $userId) {
           error {
             message
           }
@@ -354,7 +358,8 @@ test('Leaving a team updates User.tms', async () => {
       }
     `,
     variables: {
-      teamMemberId
+      teamId,
+      userId: user.userId
     },
     cookie: user.cookie
   })

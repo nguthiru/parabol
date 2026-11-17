@@ -1,13 +1,16 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
-      "~/*": ["*"],
-      "parabol-client/*": ["*"]
+      "~/*": ["./*"],
+      "parabol-client/*": ["./*"]
     },
     "outDir": "lib",
-    "lib": ["esnext", "dom"]
+    "incremental": true,
+    "lib": ["esnext", "dom"],
+    // browser code: no node globals (and @types/node isn't a dep here)
+    "types": ["jest"]
   },
-  "exclude": ["serviceWorker", "node_modules"]
+  "include": ["**/*", "../types/**/*"],
+  "exclude": ["serviceWorker", "node_modules", "dist", "build", "../server", "../embedder"]
 }

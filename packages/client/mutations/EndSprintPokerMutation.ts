@@ -5,15 +5,17 @@ import type {EndSprintPokerMutation_team$data} from '~/__generated__/EndSprintPo
 import onMeetingRoute from '~/utils/onMeetingRoute'
 import type {EndSprintPokerMutation as TEndSprintPokerMutation} from '../__generated__/EndSprintPokerMutation.graphql'
 import type {
-  HistoryMaybeLocalHandler,
+  NavigateMaybeLocalHandler,
   OnNextHandler,
-  OnNextHistoryContext,
+  OnNextNavigateContext,
   SharedUpdater,
   StandardMutation
 } from '../types/relayMutations'
 import {GQLID} from '../utils/GQLID'
+import safeRemoveNodeFromArray from '../utils/relay/safeRemoveNodeFromArray'
 import handleAddTimelineEvent from './handlers/handleAddTimelineEvent'
 import handleRemoveTasks from './handlers/handleRemoveTasks'
+import {snackOnError} from './handlers/snackOnError'
 import popEndMeetingToast from './toasts/popEndMeetingToast'
 
 graphql`
@@ -45,12 +47,9 @@ graphql`
     }
     team {
       id
-      activeMeetings {
-        id
-      }
     }
     timelineEvent {
-      ...TimelineEventPokerComplete_timelineEvent @relay(mask: false)
+      ...TimelineEventPokerComplete_timelineEvent @relay(mask: false) @alias
     }
     removedTaskIds
   }
@@ -64,26 +63,26 @@ const mutation = graphql`
           message
         }
       }
-      ...EndSprintPokerMutation_team @relay(mask: false)
+      ...EndSprintPokerMutation_team @relay(mask: false) @alias
     }
   }
 `
 
 export const endSprintPokerTeamOnNext: OnNextHandler<
   EndSprintPokerMutation_team$data,
-  OnNextHistoryContext
+  OnNextNavigateContext
 > = (payload, context) => {
   const {isKill, meeting} = payload
-  const {atmosphere, history} = context
+  const {atmosphere, navigate} = context
   if (!meeting) return
   const {id: meetingId, teamId, summaryPageId} = meeting
   if (onMeetingRoute(window.location.pathname, [meetingId])) {
     if (isKill) {
-      history.push(`/team/${teamId}`)
+      navigate(`/team/${teamId}`)
       popEndMeetingToast(atmosphere, meetingId)
     } else if (summaryPageId) {
       const pageCode = GQLID.fromKey(summaryPageId)[0]
-      history.push(`/pages/${pageCode}`)
+      navigate(`/pages/${pageCode}`)
     }
   }
 }
@@ -98,12 +97,13 @@ export const endSprintPokerTeamUpdater: SharedUpdater<EndSprintPokerMutation_tea
   const meeting = payload.getLinkedRecord('meeting') as RecordProxy
   const timelineEvent = payload.getLinkedRecord('timelineEvent') as RecordProxy
   handleAddTimelineEvent(meeting, timelineEvent, store)
+  safeRemoveNodeFromArray(meeting?.getDataID(), payload.getLinkedRecord('team'), 'activeMeetings')
 }
 
 const EndSprintPokerMutation: StandardMutation<
   TEndSprintPokerMutation,
-  HistoryMaybeLocalHandler
-> = (atmosphere, variables, {onError, onCompleted, history}) => {
+  NavigateMaybeLocalHandler
+> = (atmosphere, variables, {onError, onCompleted, navigate}) => {
   return commitMutation<TEndSprintPokerMutation>(atmosphere, {
     mutation,
     variables,
@@ -117,12 +117,14 @@ const EndSprintPokerMutation: StandardMutation<
       if (onCompleted) {
         onCompleted(res, errors)
       }
-      endSprintPokerTeamOnNext(res.endSprintPoker as any, {
+      const payload = res.endSprintPoker.EndSprintPokerMutation_team
+      if (!payload) return
+      endSprintPokerTeamOnNext(payload, {
         atmosphere,
-        history
+        navigate
       })
     },
-    onError
+    onError: onError ?? snackOnError(atmosphere)
   })
 }
 
