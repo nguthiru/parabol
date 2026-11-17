@@ -63,8 +63,9 @@ const signUpWithPassword: MutationResolvers['signUpWithPassword'] = async (
   if (!nickname || !domain) {
     return {error: {message: 'Invalid email'}}
   }
+  const skipEmailVerification = process.env.SKIP_EMAIL_VERIFICATION === 'true'
   const verifiedByInvite = await isValidEmailInvitationToken(email, invitationToken)
-  if (!verifiedByInvite) {
+  if (!verifiedByInvite && !skipEmailVerification) {
     const existingVerification = await pg
       .selectFrom('EmailVerification')
       .selectAll()
@@ -87,7 +88,7 @@ const signUpWithPassword: MutationResolvers['signUpWithPassword'] = async (
   const newUser = await createNewLocalUser({
     email,
     hashedPassword,
-    isEmailVerified: false,
+    isEmailVerified: skipEmailVerification || verifiedByInvite,
     pseudoId
   })
   // MUTATIVE

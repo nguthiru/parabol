@@ -7,7 +7,9 @@ tracer.init({
   version: __APP_VERSION__,
   tags: {
     serverId: process.env.SERVER_ID
-  }
+  },
+  // Disable startup logs to prevent "Could not store tracer configuration" warnings in containerized environments
+  startupLogs: process.env.DD_TRACE_STARTUP_LOGS === 'true'
 })
 tracer
   .use('ioredis')
